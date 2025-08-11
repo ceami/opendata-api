@@ -1,0 +1,66 @@
+services:
+  odm-mongo:
+    container_name: "odm-mongo"
+    image: mongo:8.0.12
+    ports:
+      - 27017:27017
+    volumes:
+      - odm-data:/data/db
+    env_file:
+      - ./services/odm/.env
+    networks:
+      - odm-network
+
+  core-server:
+    build:
+      context: ./services/odm/
+      dockerfile: Dockerfile
+    container_name: "odm-core-server"
+    command:  >
+      sh -c "uv run gunicorn -c /opt/program/core/gunicorn_config.py main:app --timeout 60"
+    cpus: 1.0
+    mem_limit: "2g"
+    mem_reservation: "1g"
+    ports:
+      - "7500:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    env_file:
+      - ./services/odm/.env
+    networks:
+      - odm-network
+
+  elasticsearch:
+    build:
+      context: ./services/elasticsearch
+      dockerfile: Dockerfile
+    container_name: "odm-elasticsearch"
+    cpus: 1.0
+    mem_limit: "2g"
+    mem_reservation: "1g"
+    ports:
+      - "7501:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    env_file:
+      - ./services/odm/.env
+    networks:
+      - odm-network
+
+volumes:
+  es-data:
+  odm-data:
+
+networks:
+  odm-network:
+    name: odm-network
+    driver: bridge

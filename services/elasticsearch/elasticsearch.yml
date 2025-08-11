@@ -1,0 +1,49 @@
+cluster.name: es-title-cluster
+node.name: es-node-1
+network.host: 0.0.0.0
+http.port: 9200
+
+discovery.type: single-node
+
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: false
+
+index:
+  number_of_shards: 1
+  number_of_replicas: 0
+
+analysis:
+  analyzer:
+    title_ngram_analyzer:
+      type: custom
+      tokenizer: nori_tokenizer
+      filter:
+        - lowercase
+        - ngram_filter
+    title_search_analyzer:
+      type: custom
+      tokenizer: nori_tokenizer
+      filter:
+        - lowercase
+    improved_nori_analyzer:
+      type: custom
+      tokenizer: nori_tokenizer
+      filter:
+        - lowercase
+        - nori_readingform
+        - synonym_filter
+    improved_search_analyzer:
+      type: custom
+      tokenizer: nori_tokenizer
+      filter:
+        - lowercase
+        - synonym_filter
+  tokenizer:
+    nori_tokenizer:
+      type: nori_tokenizer
+      decompound_mode: mixed
+  filter:
+    ngram_filter:
+      type: ngram
+      min_gram: 2
+      max_gram: 10
