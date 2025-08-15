@@ -1,9 +1,6 @@
 from typing import Dict, Any
-import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 from models import OpenDataInfo, APIStdDocument
-
-logger = logging.getLogger(__name__)
 
 
 class CrossCollectionService:
@@ -89,19 +86,22 @@ class CrossCollectionService:
             total = result[0].get("total", [{}])[0].get("count", 0) if result[0].get("total") else 0
 
             from schemas.response import CrossCollectionItem
-            
+
             formatted_data = []
             for doc in data:
+                updated_at = doc.get("updated_at")
+                updated_at_str = updated_at.isoformat() if updated_at else None
+
                 item = CrossCollectionItem(
                     list_id=doc["list_id"],
                     list_title=doc.get("list_title", ""),
                     org_nm=doc.get("org_nm", ""),
                     token_count=doc.get("token_count", 0),
-                    has_generated_doc=doc.get("has_generated_doc", False)
+                    has_generated_doc=doc.get("has_generated_doc", False),
+                    updated_at=updated_at_str,
+                    data_type=doc.get("data_type", "API"),
                 )
-                formatted_data.append(item.model_dump())
-
-            logger.info(f"교집합 데이터 {len(formatted_data)}개 조회 완료 (총 {total}개)")
+                formatted_data.append(item.model_dump(by_alias=True))
 
             return {
                 "data": formatted_data,
@@ -110,8 +110,7 @@ class CrossCollectionService:
                 "size": size
             }
 
-        except Exception as e:
-            logger.error("교집합 데이터 조회 중 오류 발생: {}".format(e))
+        except Exception:
             raise
 
     def _get_markdown_preview(self, markdown: str) -> str:
@@ -159,6 +158,5 @@ class CrossCollectionService:
                 "std_docs_coverage": (cross_collection_count / total_std_docs * 100) if total_std_docs > 0 else 0
             }
 
-        except Exception as e:
-            logger.error("교집합 통계 조회 중 오류 발생: {}".format(e))
+        except Exception:
             raise

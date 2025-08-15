@@ -34,4 +34,4 @@ class TitleResult(BaseModel):
     list_title: str = Field(..., description="리스트 제목")
     title: str = Field(..., description="제목")
     category_nm: str = Field(..., description="카테고리명")
-    dept_nm: str = Field(..., description="부서명") 
+    dept_nm: str = Field(..., description="부서명")
