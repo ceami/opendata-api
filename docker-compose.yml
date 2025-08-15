@@ -2,6 +2,7 @@ services:
   odm-mongo:
     container_name: "odm-mongo"
     image: mongo:8.0.12
+    restart: unless-stopped
     ports:
       - 27017:27017
     volumes:
@@ -9,13 +10,14 @@ services:
     env_file:
       - ./services/odm/.env
     networks:
-      - odm-network
+      - opendata-network
 
-  core-server:
+  opendata-api:
     build:
       context: ./services/odm/
       dockerfile: Dockerfile
-    container_name: "odm-core-server"
+    container_name: "opendata-api"
+    restart: unless-stopped
     command:  >
       sh -c "uv run gunicorn -c /opt/program/core/gunicorn_config.py main:app --timeout 60"
     cpus: 1.0
@@ -26,22 +28,23 @@ services:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 60s
     env_file:
       - ./services/odm/.env
     networks:
-      - odm-network
+      - opendata-network
 
   elasticsearch:
     build:
       context: ./services/elasticsearch
       dockerfile: Dockerfile
-    container_name: "odm-elasticsearch"
+    container_name: "opendata-elasticsearch"
     cpus: 1.0
     mem_limit: "2g"
     mem_reservation: "1g"
+    restart: unless-stopped
     ports:
       - "7501:9200"
     volumes:
@@ -50,17 +53,18 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:9200"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
+      start_period: 60s
     env_file:
       - ./services/odm/.env
     networks:
-      - odm-network
+      - opendata-network
 
 volumes:
   es-data:
   odm-data:
 
 networks:
-  odm-network:
-    name: odm-network
+  opendata-network:
+    name: opendata-network
     driver: bridge
