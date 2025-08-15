@@ -1,30 +1,19 @@
 services:
-  odm-mongo:
-    container_name: "odm-mongo"
-    image: mongo:8.0.12
-    restart: unless-stopped
-    ports:
-      - 27017:27017
-    volumes:
-      - odm-data:/data/db
-    env_file:
-      - ./services/odm/.env
-    networks:
-      - opendata-network
-
   opendata-api:
     build:
-      context: ./services/odm/
+      context: ./services/opendata-api/
       dockerfile: Dockerfile
     container_name: "opendata-api"
-    restart: unless-stopped
     command:  >
       sh -c "uv run gunicorn -c /opt/program/core/gunicorn_config.py main:app --timeout 60"
-    cpus: 1.0
-    mem_limit: "2g"
+    restart: unless-stopped
+    cpus: 2.0
+    mem_limit: "8g"
     mem_reservation: "1g"
-    ports:
-      - "7500:8000"
+    expose:
+      - 8000
+    environment:
+      - ENV=${ENV:-local}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -32,7 +21,7 @@ services:
       retries: 3
       start_period: 60s
     env_file:
-      - ./services/odm/.env
+      - .env.${ENV}
     networks:
       - opendata-network
 
@@ -40,13 +29,13 @@ services:
     build:
       context: ./services/elasticsearch
       dockerfile: Dockerfile
-    container_name: "opendata-elasticsearch"
-    cpus: 1.0
-    mem_limit: "2g"
-    mem_reservation: "1g"
+    container_name: "opendata-es"
     restart: unless-stopped
-    ports:
-      - "7501:9200"
+    cpus: 1.0
+    mem_limit: "8g"
+    mem_reservation: "1g"
+    expose:
+      - 9200
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
@@ -55,14 +44,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    env_file:
-      - ./services/odm/.env
     networks:
       - opendata-network
 
+  opendata-mongo:
+    container_name: opendata-mongo
+    image: mongo:8.0.12
+    expose:
+      - 27017
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - opendata-network
+    env_file:
+      - .env.${ENV}
+    restart: always
+
 volumes:
   es-data:
-  odm-data:
+  mongo-data:
 
 networks:
   opendata-network:
