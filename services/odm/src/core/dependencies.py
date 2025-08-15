@@ -1,4 +1,3 @@
-import os
 from typing import Any, Dict, Optional
 import asyncio
 import logging
@@ -8,6 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from elasticsearch import Elasticsearch
 from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
+from models.open_data import OpenDataInfo, APIStdDocument, ParsedAPIInfo
 from db import MongoDB
 from .settings import Settings, get_settings
 
@@ -53,16 +54,9 @@ class ServiceContainer:
             mongo_client = AsyncIOMotorClient(settings.MONGO_URL)
             self._services["mongo_client"] = mongo_client
 
-            from beanie import init_beanie
-            from models.open_data import OpenDataInfo, APIStdDocument
-            
             await init_beanie(
                 database=mongo_client.open_data,
-                document_models=[OpenDataInfo]
-            )
-            await init_beanie(
-                database=mongo_client.open_data,
-                document_models=[APIStdDocument]
+                document_models=[OpenDataInfo, APIStdDocument, ParsedAPIInfo]
             )
 
             self._initialized = True

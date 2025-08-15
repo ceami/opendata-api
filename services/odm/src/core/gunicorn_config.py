@@ -1,8 +1,6 @@
-# Server socket
 bind = "0.0.0.0:8000"
 backlog = 2048
 
-# Worker processes
 workers = 4
 worker_class = "uvicorn.workers.UvicornWorker"
 worker_conncetions = 1000

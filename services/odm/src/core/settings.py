@@ -3,7 +3,11 @@ from typing import List, Optional, Type
 from functools import lru_cache
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 from pydantic_settings.sources import PyprojectTomlConfigSettingsSource
 
 
