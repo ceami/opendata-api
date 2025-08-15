@@ -1,4 +1,3 @@
-import os
 import asyncio
 import logging
 from typing import List, Dict, Any
@@ -23,13 +22,13 @@ class TitleIndexer:
             es_hosts = [settings.ELASTICSEARCH_URL]
 
         self.mongo_uri = mongo_uri
-        self.es = Elasticsearch(es_hosts)
+        self.es = Elasticsearch(["http://elasticsearch:9200"])
         self.index_name = settings.ELASTICSEARCH_INDEX_NAME
 
     async def initialize_beanie(self):
         from motor.motor_asyncio import AsyncIOMotorClient
         from beanie import init_beanie
-        
+
         mongo_client = AsyncIOMotorClient(self.mongo_uri)
         await init_beanie(
             database=mongo_client.open_data,
@@ -52,15 +51,35 @@ class TitleIndexer:
                     "list_title": {
                         "type": "text",
                         "analyzer": "nori_analyzer",
-                        "search_analyzer": "nori_analyzer"
+                        "search_analyzer": "nori_analyzer",
+                        "fields": {
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256
+                            },
+                            "ngram": {
+                                "type": "text",
+                                "analyzer": "ngram_analyzer"
+                            }
+                        }
                     },
                     "list_id": {
                         "type": "integer"
                     },
                     "title": {
                         "type": "text",
-                        "analyzer": "nori_analyzer",
-                        "search_analyzer": "nori_analyzer"
+                        "analyzer": "english_analyzer",
+                        "search_analyzer": "english_analyzer",
+                        "fields": {
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256
+                            },
+                            "korean": {
+                                "type": "text",
+                                "analyzer": "nori_analyzer"
+                            }
+                        }
                     },
                     "category_nm": {
                         "type": "keyword"
@@ -68,7 +87,23 @@ class TitleIndexer:
                     "dept_nm": {
                         "type": "keyword"
                     },
+                    "org_nm": {
+                        "type": "text",
+                        "analyzer": "nori_analyzer",
+                        "search_analyzer": "nori_analyzer"
+                    },
                     "keywords": {
+                        "type": "keyword"
+                    },
+                    "desc": {
+                        "type": "text",
+                        "analyzer": "nori_analyzer",
+                        "search_analyzer": "nori_analyzer"
+                    },
+                    "data_format": {
+                        "type": "keyword"
+                    },
+                    "api_type": {
                         "type": "keyword"
                     }
                 }
@@ -79,9 +114,42 @@ class TitleIndexer:
                         "nori_analyzer": {
                             "type": "nori",
                             "tokenizer": "nori_tokenizer",
-                            "filter": ["nori_readingform", "lowercase"]
+                            "filter": ["nori_readingform", "lowercase", "trim"]
+                        },
+                        "english_analyzer": {
+                            "type": "custom",
+                            "tokenizer": "standard",
+                            "filter": [
+                                "lowercase",
+                                "english_stop",
+                                "english_stemmer",
+                                "trim"
+                            ]
+                        },
+                        "ngram_analyzer": {
+                            "type": "custom",
+                            "tokenizer": "standard",
+                            "filter": ["lowercase", "ngram_filter"]
+                        }
+                    },
+                    "filter": {
+                        "ngram_filter": {
+                            "type": "ngram",
+                            "min_gram": 2,
+                            "max_gram": 3
+                        },
+                        "english_stop": {
+                            "type": "stop",
+                            "stopwords": "_english_"
+                        },
+                        "english_stemmer": {
+                            "type": "stemmer",
+                            "language": "english"
                         }
                     }
+                },
+                "index": {
+                    "max_ngram_diff": 50
                 }
             }
         }
@@ -89,8 +157,6 @@ class TitleIndexer:
         try:
             if not self.es.indices.exists(index=self.index_name):
                 self.es.indices.create(index=self.index_name, body=mapping)
-            else:
-                logger.info(f"인덱스 {self.index_name}가 이미 존재합니다.")
         except Exception as e:
             logger.error(f"인덱스 생성 중 오류 발생: {e}")
             raise
@@ -104,7 +170,11 @@ class TitleIndexer:
                     "title": doc.get("title", ""),
                     "category_nm": doc.get("category_nm", ""),
                     "dept_nm": doc.get("dept_nm", ""),
-                    "keywords": doc.get("keywords", [])
+                    "org_nm": doc.get("org_nm", ""),
+                    "keywords": doc.get("keywords", []),
+                    "desc": doc.get("desc", ""),
+                    "data_format": doc.get("data_format", ""),
+                    "api_type": doc.get("api_type", "")
                 }
 
                 self.es.index(
