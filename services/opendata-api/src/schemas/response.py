@@ -1,4 +1,4 @@
-from typing import Generic, TypeVar, List, Dict, Any, Optional
+from typing import Generic, TypeVar, List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict, AliasGenerator
 from pydantic.alias_generators import to_camel
 
@@ -48,16 +48,6 @@ class TitleResult(BaseModelWithConfig):
     dept_nm: Optional[str] = None
 
 
-class CrossCollectionItem(BaseModelWithConfig):
-    list_id: int
-    list_title: str
-    org_nm: str
-    token_count: int
-    has_generated_doc: bool
-    updated_at: Optional[str] = None
-    data_type: str
-
-
 class SearchWithDocsItem(BaseModelWithConfig):
     list_id: int
     list_title: str
@@ -69,23 +59,32 @@ class SearchWithDocsItem(BaseModelWithConfig):
     score: Optional[float] = None
 
 
+class SearchWithDocsDetailItem(BaseModelWithConfig):
+    list_id: int
+    list_title: str
+    title: Optional[str] = None
+    org_nm: Optional[str] = None
+    data_type: str
+    score: Optional[float] = None
+    detail: Optional[Dict[str, Any]] = None
+
+
 class DocumentWithParsedInfo(BaseModelWithConfig):
     list_id: int
+    data_type: str
     list_title: Optional[str] = None
     detail_url: str
     generated_status: bool
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    description: Optional[str] = None
     org_nm: Optional[str] = None
     dept_nm: Optional[str] = None
-    phone_number: Optional[str] = None
     is_charged: Optional[str] = None
-    traffic: Optional[str] = None
-    permission: Optional[str] = None
-    docs: Optional[str] = None
+    share_scope_nm: Optional[str] = None
     keywords: List[str] = []
-    description: Optional[str] = None
-    token_count: int
+    token_count: int = 0
+    generated_at: Optional[str] = None
     markdown: Optional[str] = None
 
 
@@ -102,6 +101,13 @@ class SearchResponse(BaseModelWithConfig):
     results: List[Dict[str, Any]]
 
 
+class SearchWithDocsDetailResponse(BaseModelWithConfig):
+    total: int
+    page: int
+    page_size: int
+    results: List[SearchWithDocsDetailItem]
+
+
 class IndexStatsResponse(BaseModelWithConfig):
     index_name: str
     total_docs: int
@@ -110,13 +116,46 @@ class IndexStatsResponse(BaseModelWithConfig):
     search_stats: Dict[str, Any]
 
 
-class APIStdDocumentResponse(BaseModelWithConfig):
-    id: str
+class GeneratedDocumentResponse(BaseModelWithConfig):
     listId: int
     detailUrl: str
     markdown: str
     llmModel: str
     tokenCount: int
+    dataType: str
+    resultJson: Optional[Dict[str, Any]] = None
+    detail: Optional[Dict[str, Any]] = None
+
+
+class UnifiedDataItem(BaseModelWithConfig):
+    list_id: int
+    title: str
+    description: str
+    department: str
+    category: str
+    data_type: Literal["API", "FILE"]
+    data_format: str
+    pricing: str
+    copyright: str
+    third_party_copyright: str
+    keywords: List[str]
+    register_status: str
+    request_cnt: int
+    download_cnt: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    use_prmisn_ennc: str
+    title_en: Optional[str] = None
+    api_type: Optional[str] = None
+    endpoints: Optional[List[Dict[str, Any]]] = None
+    has_generated_doc: bool = False
+    token_count: int = 0
+    score: Optional[float] = None
+
+
+class SaveRequestBody(BaseModel):
+    list_id: Optional[int] = Field(None, description="저장할 list_id")
+    url: Optional[str] = Field(None, description="저장할 url")
 
 
 def create_paginated_response(
@@ -157,12 +196,16 @@ def calculate_offset(page: int, size: int) -> int:
     return (page - 1) * size
 
 
-def convert_api_std_document_to_camel_case(doc: Dict[str, Any]) -> Dict[str, Any]:
+def convert_generated_document_to_camel_case(
+    doc: Dict[str, Any], data_type: str
+) -> Dict[str, Any]:
     return {
-        "id": doc.get("id"),
         "listId": doc.get("list_id"),
         "detailUrl": doc.get("detail_url"),
         "markdown": doc.get("markdown"),
         "llmModel": doc.get("llm_model"),
-        "tokenCount": doc.get("token_count")
+        "tokenCount": doc.get("token_count"),
+        "dataType": data_type,
+        "resultJson": doc.get("result_json"),
+        "detail": doc.get("detail")
     }
