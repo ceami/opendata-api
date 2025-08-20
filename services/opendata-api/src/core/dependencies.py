@@ -8,7 +8,15 @@ from fastapi import FastAPI, Depends, HTTPException
 from elasticsearch import Elasticsearch
 from motor.motor_asyncio import AsyncIOMotorClient
 from beanie import init_beanie
-from models.open_data import OpenDataInfo, APIStdDocument, ParsedAPIInfo
+from models.open_data import (
+    OpenAPIInfo,
+    ParsedAPIInfo,
+    ParsedFileInfo,
+    GeneratedAPIDocs,
+    GeneratedFileDocs,
+    OpenFileInfo,
+    SavedRequest,
+)
 from db import MongoDB
 from .settings import Settings, get_settings
 
@@ -56,7 +64,15 @@ class ServiceContainer:
 
             await init_beanie(
                 database=mongo_client.open_data,
-                document_models=[OpenDataInfo, APIStdDocument, ParsedAPIInfo]
+                document_models=[
+                    OpenAPIInfo,
+                    ParsedAPIInfo,
+                    ParsedFileInfo,
+                    GeneratedAPIDocs,
+                    GeneratedFileDocs,
+                    OpenFileInfo,
+                    SavedRequest
+                ]
             )
 
             self._initialized = True
@@ -123,6 +139,9 @@ class ServiceContainer:
             )
         return self._loggers[name]
 
+    def get_service_logger(self, service_name: str) -> logging.Logger:
+        return self.get_logger(f"service.{service_name}")
+
 
 service_container = ServiceContainer()
 
@@ -176,7 +195,8 @@ def get_cross_collection_service():
     from service.cross_collection import CrossCollectionService
 
     mongo_client = get_mongo_client()
-    return CrossCollectionService(mongo_client)
+    logger = service_container.get_service_logger("cross_collection")
+    return CrossCollectionService(mongo_client, logger)
 
 
 def get_search_service():
@@ -190,3 +210,7 @@ def get_search_service():
         )
 
     return SearchService(es_client)
+
+
+def get_logger_service(service_name: str):
+    return service_container.get_service_logger(service_name)

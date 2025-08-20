@@ -1,4 +1,10 @@
-from .settings import Settings, get_settings, get_development_settings, get_production_settings, get_test_settings
+from .settings import (
+    Settings,
+    get_settings,
+    get_development_settings,
+    get_production_settings,
+    get_test_settings,
+)
 from .dependencies import (
     ServiceContainer,
     get_service_container,

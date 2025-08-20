@@ -5,22 +5,30 @@ from typing import List
 from core.exceptions import create_openapi_http_exception_doc
 from core.dependencies import get_search_service
 from service.search import SearchService
-from models import APIStdDocument
-from models import OpenDataInfo
-from schemas.response import SearchResponse, IndexStatsResponse, SearchWithDocsItem
+from models import (
+    GeneratedAPIDocs,
+    GeneratedFileDocs,
+    OpenAPIInfo,
+    OpenFileInfo
+)
+from schemas.response import (
+    IndexStatsResponse,
+    SearchWithDocsDetailItem,
+    SearchWithDocsDetailResponse
+)
 
 search_router = APIRouter(prefix="/search", tags=["search"])
 
 
 @search_router.get(
     path="/title",
-    response_model=SearchResponse,
+    response_model=SearchWithDocsDetailResponse,
     responses=create_openapi_http_exception_doc([
         status.HTTP_400_BAD_REQUEST,
         status.HTTP_404_NOT_FOUND,
         status.HTTP_500_INTERNAL_SERVER_ERROR,
     ]),
-    description="제목으로 공공 데이터 검색 (표준 문서가 있는 API만)",
+    description="제목으로 공공데이터 검색 (생성된 문서가 있는 API/File, 엔드포인트 설명 포함)",
 )
 async def search_titles(
     query: List[str] = Query(..., description="검색할 키워드"),
@@ -30,18 +38,12 @@ async def search_titles(
 ):
 
     try:
-        std_doc_list_ids = await APIStdDocument.find().to_list()
-        std_doc_list_ids = [doc.list_id for doc in std_doc_list_ids]
-
-        if not std_doc_list_ids:
-            return {
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-                "results": []
-            }
-
-        search_size = page_size * 3
+        api_doc_list_ids = await GeneratedAPIDocs.find().to_list()
+        file_doc_list_ids = await GeneratedFileDocs.find().to_list()
+        api_list_ids = [doc.list_id for doc in api_doc_list_ids]
+        file_list_ids = [doc.list_id for doc in file_doc_list_ids]
+        all_generated_list_ids = api_list_ids + file_list_ids
+        search_size = max(page_size * 3, 10)
         from_ = 0
 
         hits = search_service.search_titles_with_weights(
@@ -53,7 +55,9 @@ async def search_titles(
         filtered_hits = []
         for hit in hits["hits"]:
             list_id = hit["_source"].get("list_id")
-            if list_id in std_doc_list_ids:
+            list_id_int = int(list_id) if list_id is not None else None
+
+            if list_id_int in all_generated_list_ids:
                 filtered_hits.append(hit)
                 if len(filtered_hits) >= page_size * 2:
                     break
@@ -62,58 +66,105 @@ async def search_titles(
         end_idx = start_idx + page_size
         paginated_hits = filtered_hits[start_idx:end_idx]
 
-        list_ids = [hit["_source"].get("list_id") for hit in paginated_hits]
-        std_docs = {}
+        list_ids = []
+        for hit in paginated_hits:
+            list_id = hit["_source"].get("list_id")
+            list_id_int = int(list_id) if list_id is not None else None
+            if list_id_int is not None:
+                list_ids.append(list_id_int)
 
+        api_docs = {}
         if list_ids:
-            docs = await APIStdDocument.find(
-                In(APIStdDocument.list_id, list_ids)
+            api_docs_data = await GeneratedAPIDocs.find(
+                In(GeneratedAPIDocs.list_id, list_ids)
             ).to_list()
 
-            for doc in docs:
-                std_docs[doc.list_id] = {
-                    "token_count": doc.token_count or 0,
-                    "has_generated_doc": True
+            for doc in api_docs_data:
+                api_docs[doc.list_id] = {
+                    "data_type": "API",
+                    "detail": doc.detail if hasattr(doc, 'detail') else None
                 }
 
-        open_data_info = {}
+        file_docs = {}
         if list_ids:
-            open_data_docs = await OpenDataInfo.find(
-                In(OpenDataInfo.list_id, list_ids)
+            file_docs_data = await GeneratedFileDocs.find(
+                In(GeneratedFileDocs.list_id, list_ids)
             ).to_list()
 
-            for doc in open_data_docs:
-                open_data_info[doc.list_id] = {
-                    "org_nm": doc.org_nm
+            for doc in file_docs_data:
+                file_docs[doc.list_id] = {
+                    "data_type": "FILE",
+                    "detail": doc.detail if hasattr(doc, 'detail') else None
+                }
+
+        open_api_info = {}
+        if list_ids:
+            open_api_docs = await OpenAPIInfo.find(
+                In(OpenAPIInfo.list_id, list_ids)
+            ).to_list()
+
+            for doc in open_api_docs:
+                open_api_info[doc.list_id] = {
+                    "org_nm": doc.org_nm,
+                    "list_title": doc.list_title,
+                    "title": doc.title,
+                }
+
+        open_file_info = {}
+        if list_ids:
+            open_file_docs = await OpenFileInfo.find(
+                In(OpenFileInfo.list_id, list_ids)
+            ).to_list()
+
+            for doc in open_file_docs:
+                open_file_info[doc.list_id] = {
+                    "org_nm": doc.org_nm,
+                    "list_title": doc.list_title or doc.title,
+                    "title": doc.title,
                 }
 
         results = []
         for hit in paginated_hits:
             source = hit["_source"]
             list_id = source.get("list_id")
+            data_type = source.get("data_type", "API")
 
-            if list_id in std_docs:
-                std_doc_data = std_docs[list_id]
-                token_count = std_doc_data["token_count"]
-                has_generated_doc = std_doc_data["has_generated_doc"]
+            list_id_int = int(list_id) if list_id is not None else None
+
+            if list_id_int in api_docs:
+                doc_data = api_docs[list_id_int]
+                data_type = doc_data["data_type"]
+                detail = doc_data.get("detail")
+                org_nm = open_api_info.get(list_id_int, {}).get("org_nm")
+                list_title = open_api_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
+                title = open_api_info.get(list_id_int, {}).get("title") or source.get("title", "")
+
+            elif list_id_int in file_docs:
+                doc_data = file_docs[list_id_int]
+                data_type = doc_data["data_type"]
+                detail = doc_data.get("detail")
+                org_nm = open_file_info.get(list_id_int, {}).get("org_nm")
+                list_title = open_file_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
+                title = open_file_info.get(list_id_int, {}).get("title") or source.get("title", "")
+
             else:
-                token_count = 0
-                has_generated_doc = False
+                detail = None
+                org_nm = open_api_info.get(list_id_int, {}).get("org_nm") or open_file_info.get(list_id_int, {}).get("org_nm")
+                list_title = source.get("list_title", "")
+                title = source.get("title", "")
 
-            org_nm = open_data_info.get(list_id, {}).get("org_nm") if list_id in open_data_info else None
-
-            item = SearchWithDocsItem(
+            item = SearchWithDocsDetailItem(
                 list_id=list_id,
-                list_title=source.get("list_title", ""),
+                list_title=list_title,
+                title=title,
                 org_nm=org_nm,
                 score=hit.get("_score"),
-                token_count=token_count,
-                has_generated_doc=has_generated_doc,
-                data_type="API"
+                data_type=data_type,
+                detail=detail
             )
-            results.append(item.model_dump(by_alias=True))
+            results.append(item)
 
-        return SearchResponse(
+        return SearchWithDocsDetailResponse(
             total=len(filtered_hits),
             page=page,
             page_size=page_size,
@@ -126,13 +177,13 @@ async def search_titles(
 
 @search_router.get(
     path="/title/std-docs",
-    response_model=SearchResponse,
+    response_model=SearchWithDocsDetailResponse,
     responses=create_openapi_http_exception_doc([
         status.HTTP_400_BAD_REQUEST,
         status.HTTP_404_NOT_FOUND,
         status.HTTP_500_INTERNAL_SERVER_ERROR,
     ]),
-    description="제목으로 공공 데이터 검색 (표준 문서가 있는 API만 필터링)",
+    description="제목으로 공공 데이터 검색 (생성된 문서가 있는 API/File 필터링, 엔드포인트 설명 포함)",
 )
 async def search_titles_with_docs(
     q: str = Query(..., description="검색할 키워드"),
@@ -141,18 +192,12 @@ async def search_titles_with_docs(
     search_service: SearchService = Depends(get_search_service),
 ):
     try:
-        std_doc_list_ids = await APIStdDocument.find().to_list()
-        std_doc_list_ids = [doc.list_id for doc in std_doc_list_ids]
-
-        if not std_doc_list_ids:
-            return SearchResponse(
-                total=0,
-                page=page,
-                page_size=page_size,
-                results=[]
-            ).model_dump(by_alias=True)
-
-        search_size = page_size * 3
+        api_doc_list_ids = await GeneratedAPIDocs.find().to_list()
+        file_doc_list_ids = await GeneratedFileDocs.find().to_list()
+        api_list_ids = [doc.list_id for doc in api_doc_list_ids]
+        file_list_ids = [doc.list_id for doc in file_doc_list_ids]
+        all_generated_list_ids = api_list_ids + file_list_ids
+        search_size = max(page_size * 3, 10)
         from_ = 0
 
         hits = search_service.search_titles(
@@ -164,7 +209,9 @@ async def search_titles_with_docs(
         filtered_hits = []
         for hit in hits["hits"]:
             list_id = hit["_source"].get("list_id")
-            if list_id in std_doc_list_ids:
+            list_id_int = int(list_id) if list_id is not None else None
+
+            if list_id_int in all_generated_list_ids:
                 filtered_hits.append(hit)
                 if len(filtered_hits) >= page_size * 2:
                     break
@@ -173,61 +220,105 @@ async def search_titles_with_docs(
         end_idx = start_idx + page_size
         paginated_hits = filtered_hits[start_idx:end_idx]
 
-        list_ids = [hit["_source"].get("list_id") for hit in paginated_hits]
-        std_docs = {}
+        list_ids = []
+        for hit in paginated_hits:
+            list_id = hit["_source"].get("list_id")
+            list_id_int = int(list_id) if list_id is not None else None
+            if list_id_int is not None:
+                list_ids.append(list_id_int)
 
+        api_docs = {}
         if list_ids:
-            docs = await APIStdDocument.find(
-                In(APIStdDocument.list_id, list_ids)
+            api_docs_data = await GeneratedAPIDocs.find(
+                In(GeneratedAPIDocs.list_id, list_ids)
             ).to_list()
 
-            for doc in docs:
-                std_docs[doc.list_id] = {
-                    "token_count": doc.token_count or 0,
-                    "has_generated_doc": True
+            for doc in api_docs_data:
+                api_docs[doc.list_id] = {
+                    "data_type": "API",
+                    "detail": doc.detail if hasattr(doc, 'detail') else None
                 }
 
-        open_data_info = {}
+        file_docs = {}
         if list_ids:
-            open_data_docs = await OpenDataInfo.find(
-                In(OpenDataInfo.list_id, list_ids)
+            file_docs_data = await GeneratedFileDocs.find(
+                In(GeneratedFileDocs.list_id, list_ids)
             ).to_list()
 
-            for doc in open_data_docs:
-                open_data_info[doc.list_id] = {
-                    "org_nm": doc.org_nm
+            for doc in file_docs_data:
+                file_docs[doc.list_id] = {
+                    "data_type": "FILE",
+                    "detail": doc.detail if hasattr(doc, 'detail') else None
+                }
+
+        open_api_info = {}
+        if list_ids:
+            open_api_docs = await OpenAPIInfo.find(
+                In(OpenAPIInfo.list_id, list_ids)
+            ).to_list()
+
+            for doc in open_api_docs:
+                open_api_info[doc.list_id] = {
+                    "org_nm": doc.org_nm,
+                    "list_title": doc.list_title,
+                    "title": doc.title,
+                }
+
+        open_file_info = {}
+        if list_ids:
+            open_file_docs = await OpenFileInfo.find(
+                In(OpenFileInfo.list_id, list_ids)
+            ).to_list()
+
+            for doc in open_file_docs:
+                open_file_info[doc.list_id] = {
+                    "org_nm": doc.org_nm,
+                    "list_title": doc.list_title or doc.title,
+                    "title": doc.title,
                 }
 
         results = []
         for hit in paginated_hits:
-            try:
-                source = hit["_source"]
-                list_id = source.get("list_id")
+            source = hit["_source"]
+            list_id = source.get("list_id")
+            data_type = source.get("data_type", "API")
 
-                if list_id in std_docs:
-                    std_doc_data = std_docs[list_id]
-                    token_count = std_doc_data["token_count"]
-                    has_generated_doc = std_doc_data["has_generated_doc"]
-                else:
-                    token_count = 0
-                    has_generated_doc = False
+            list_id_int = int(list_id) if list_id is not None else None
 
-                org_nm = open_data_info.get(list_id, {}).get("org_nm") if list_id in open_data_info else None
+            if list_id_int in api_docs:
+                doc_data = api_docs[list_id_int]
+                data_type = doc_data["data_type"]
+                detail = doc_data.get("detail")
+                org_nm = open_api_info.get(list_id_int, {}).get("org_nm")
+                list_title = open_api_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
+                title = open_api_info.get(list_id_int, {}).get("title") or source.get("title", "")
 
-                item = SearchWithDocsItem(
-                    list_id=list_id,
-                    list_title=source.get("list_title", ""),
-                    org_nm=org_nm,
-                    score=hit.get("_score"),
-                    token_count=token_count,
-                    has_generated_doc=has_generated_doc,
-                    data_type="API"
-                )
-                results.append(item.model_dump(by_alias=True))
-            except Exception:
-                continue
+            elif list_id_int in file_docs:
+                doc_data = file_docs[list_id_int]
+                data_type = doc_data["data_type"]
+                detail = doc_data.get("detail")
+                org_nm = open_file_info.get(list_id_int, {}).get("org_nm")
+                list_title = open_file_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
+                title = open_file_info.get(list_id_int, {}).get("title") or source.get("title", "")
 
-        return SearchResponse(
+            else:
+                detail = None
+                org_nm = open_api_info.get(list_id_int, {}).get("org_nm") or open_file_info.get(list_id_int, {}).get("org_nm")
+                list_title = source.get("list_title", "")
+                title = source.get("title", "")
+
+            item = SearchWithDocsDetailItem(
+                list_id=list_id,
+                list_title=list_title,
+                org_nm=org_nm,
+                title=title,
+                score=hit.get("_score"),
+                data_type=data_type,
+                detail=detail
+            )
+            results.append(item)
+
+        return SearchWithDocsDetailResponse(
             total=len(filtered_hits),
             page=page,
             page_size=page_size,
