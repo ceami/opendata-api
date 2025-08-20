@@ -3,11 +3,11 @@ services:
     build:
       context: ./services/opendata-api/
       dockerfile: Dockerfile
-    container_name: "opendata-api"
+    container_name: opendata-api
     command:  >
       sh -c "uv run gunicorn -c /opt/program/core/gunicorn_config.py main:app --timeout 60"
     restart: unless-stopped
-    cpus: 2.0
+    cpus: 1.0
     mem_limit: "8g"
     mem_reservation: "1g"
     expose:
@@ -29,7 +29,7 @@ services:
     build:
       context: ./services/elasticsearch
       dockerfile: Dockerfile
-    container_name: "opendata-es"
+    container_name: opendata-es
     restart: unless-stopped
     cpus: 1.0
     mem_limit: "8g"
@@ -44,6 +44,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    env_file:
+      - .env.${ENV}
     networks:
       - opendata-network
 

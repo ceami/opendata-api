@@ -148,9 +148,9 @@ def setup_logger(
 
     loguru_logger.add(
         sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+        format="<green>{time:HH:mm:ss}</green> | "
                "<level>{level: <8}</level> | "
-               "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+               "<cyan>{file}:{line}:{function}</cyan> | "
                "<level>{message}</level>",
         level=log_level.upper(),
         colorize=True,
@@ -173,7 +173,7 @@ def setup_logger(
         loguru_logger.add(
             str(log_file),
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-                   "{name}:{function}:{line} | {message}",
+                   "{file}:{line}:{function} | {message}",
             level=log_level.upper(),
             rotation="10 MB",
             retention="30 days",
