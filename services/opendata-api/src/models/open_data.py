@@ -1,14 +1,75 @@
 from beanie import Document
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Dict, Any
 import pymongo
 
 from schemas import ParsedEndpoint
 
 
-class OpenDataInfo(Document):
+class OpenFileInfo(Document):
     """
-    OpenDataInfo 모델
+    OpenFileInfo 모델
+    공공데이터 포털에서 제공하는 파일 정보를 담는 모델
+    """
+
+    id: str
+    core_data_nm: str | None
+    cost_unit: str | None
+    created_at: datetime | None = None
+    data_limit: str | None
+    data_type: str | None
+    dept_nm: str | None
+    desc: str | None
+    download_cnt: int | None
+    etc: str | None
+    ext: str | None
+    is_charged: str | None
+    is_copyrighted: str | None
+    is_core_data: str | None
+    is_deleted: str | None
+    is_list_deleted: str | None
+    is_std_data: str | None
+    is_third_party_copyrighted: str | None
+    keywords: list[str] | None
+    list_id: int | None
+    list_title: str | None
+    media_cnt: str | None
+    media_type: str | None
+    meta_url: str | None
+    new_category_cd: str | None
+    new_category_nm: str | None
+    next_registration_date: str | None
+    org_cd: str | None
+    org_nm: str | None
+    ownership_grounds: str | None
+    regist_type: str | None
+    register_status: str | None
+    share_scope_nm: str | None
+    title: str | None
+    update_cycle: str | None
+    updated_at: datetime | None = None
+
+    class Settings:
+        name = "open_file_info"
+        indexes = [
+            "title",
+            "list_id",
+            "org_nm",
+            [("list_id", pymongo.ASCENDING)],
+            [("download_cnt", pymongo.DESCENDING)],
+            [("updated_at", pymongo.DESCENDING)],
+            [("list_title", pymongo.ASCENDING)],
+            [("org_nm", pymongo.ASCENDING)],
+            [("list_id", pymongo.ASCENDING),
+             ("download_cnt", pymongo.DESCENDING)],
+            [("list_id", pymongo.ASCENDING),
+             ("updated_at", pymongo.DESCENDING)],
+        ]
+
+
+class OpenAPIInfo(Document):
+    """
+    OpenAPIInfo 모델
     공공데이터 포털에서 제공하는 API 응답 정보를 담는 모델
     응답 정보 외에 추가 필드는 파싱 전 HTML 코드 저장 및 분류를 위한 필드
     """
@@ -77,6 +138,17 @@ class OpenDataInfo(Document):
             "list_id",
             "detail_format",
             "is_parsed",
+            [("list_id", pymongo.ASCENDING)],
+            [("request_cnt", pymongo.DESCENDING)],
+            [("updated_at", pymongo.DESCENDING)],
+            [("list_title", pymongo.ASCENDING)],
+            [("org_nm", pymongo.ASCENDING)],
+            [("list_id", pymongo.ASCENDING),
+             ("request_cnt", pymongo.DESCENDING)],
+            [("list_id", pymongo.ASCENDING),
+             ("updated_at", pymongo.DESCENDING)],
+            [("request_cnt", pymongo.DESCENDING),
+             ("updated_at", pymongo.DESCENDING)],
         ]
 
 
@@ -87,27 +159,28 @@ class ParsedAPIInfo(Document):
     """
 
     id: str
-    list_id: int
-    title: str
-    description: str
-    department: str
-    category: str
-    data_format: str
-    update_at: datetime
-    pricing: str
-    copyright: str
-    third_party_copyright: str
-    endpoints: list[ParsedEndpoint] | None = None
-    api_type: str
-    created_at: datetime
     api_confirm_for_dev: str
     api_confirm_for_prod: str
+    api_type: str
+    category: str
+    copyright: str
+    created_at: datetime
+    data_format: str
+    data_type: str
+    department: str
+    description: str
+    endpoints: list[ParsedEndpoint] | None = None
     keywords: list[str]
+    list_id: int
+    parsed_at: datetime
+    pricing: str
     register_status: str
     request_cnt: int
+    third_party_copyright: str
+    title: str
     title_en: str
+    update_at: datetime
     use_prmisn_ennc: str
-    parsed_at: datetime
 
     class Settings:
         name = "parsed_api_info"
@@ -118,8 +191,47 @@ class ParsedAPIInfo(Document):
         ]
 
 
+class ParsedFileInfo(Document):
+    """
+    OpenFileInfo를 파서를 거쳐서 만들게 되는 최종 생성물
+    """
+
+    id: str
+    api_confirm_for_dev: str | None = None
+    api_confirm_for_prod: str | None = None
+    api_type: str
+    category: str
+    created_at: datetime
+    data_format: str
+    data_type: str
+    department: str
+    description: str
+    endpoints: list[ParsedEndpoint] | None = None
+    keywords: list[str]
+    list_id: int
+    parsed_at: datetime
+    pricing: str
+    register_status: str | None = None
+    request_cnt: int
+    third_party_copyright: str
+    title: str
+    title_en: str | None = None
+    update_at: datetime | None = None
+    use_prmisn_ennc: str
+
+    class Settings:
+        name = "parsed_file_info"
+        indexes = [
+            [
+                ("title", pymongo.TEXT),
+            ],
+        ]
+
+
 class APIStdDocument(Document):
-    """API 표준 문서 모델"""
+    """API 표준 문서 모델
+    deprecated: 파서 업데이트로 인해 더 이상 사용되지 않음
+    """
 
     id: str
     list_id: int
@@ -132,4 +244,67 @@ class APIStdDocument(Document):
         name = "generated_std_docs"
         indexes = [
             "list_id",
+        ]
+
+
+class GeneratedAPIDocs(Document):
+    """생성된 API 문서 모델"""
+
+    list_id: int
+    detail_url: str
+    markdown: str
+    llm_model: str
+    token_count: int
+    result_json: Dict[str, Any] | None = None
+    detail: Dict[str, Any] | None = None
+    generated_at: datetime | None = None
+
+    class Settings:
+        name = "generated_api_docs"
+        indexes = [
+            "list_id",
+            [("list_id", pymongo.ASCENDING)],
+            [("token_count", pymongo.DESCENDING)],
+            [("generated_at", pymongo.DESCENDING)],
+            [("list_id", pymongo.ASCENDING),
+             ("token_count", pymongo.DESCENDING)],
+        ]
+
+
+class GeneratedFileDocs(Document):
+    """생성된 파일 문서 모델"""
+
+    list_id: int
+    detail_url: str
+    markdown: str
+    llm_model: str
+    token_count: int
+    status: bool | None = None
+    result_json: Dict[str, Any] | None = None
+    detail: Dict[str, Any] | None = None
+    generated_at: datetime | None = None
+
+    class Settings:
+        name = "generated_file_docs"
+        indexes = [
+            "list_id",
+            [("list_id", pymongo.ASCENDING)],
+            [("token_count", pymongo.DESCENDING)],
+            [("generated_at", pymongo.DESCENDING)],
+            [("list_id", pymongo.ASCENDING), ("token_count", pymongo.DESCENDING)],
+        ]
+
+
+class SavedRequest(Document):
+    """저장된 요청 모델"""
+
+    list_id: int | None = None
+    url: str | None = None
+    created_at: datetime | None = None
+
+    class Settings:
+        name = "saved_requests"
+        indexes = [
+            "list_id",
+            "created_at",
         ]

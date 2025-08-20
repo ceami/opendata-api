@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import List, Dict, Any
 from elasticsearch import Elasticsearch
-from models import OpenDataInfo
+from models import OpenAPIInfo, OpenFileInfo
 from core.settings import get_settings
 
 
@@ -22,7 +22,7 @@ class TitleIndexer:
             es_hosts = [settings.ELASTICSEARCH_URL]
 
         self.mongo_uri = mongo_uri
-        self.es = Elasticsearch(["http://elasticsearch:9200"])
+        self.es = Elasticsearch(es_hosts)
         self.index_name = settings.ELASTICSEARCH_INDEX_NAME
 
     async def initialize_beanie(self):
@@ -32,16 +32,24 @@ class TitleIndexer:
         mongo_client = AsyncIOMotorClient(self.mongo_uri)
         await init_beanie(
             database=mongo_client.open_data,
-            document_models=[OpenDataInfo]
+            document_models=[OpenAPIInfo, OpenFileInfo]
         )
         return mongo_client
 
-    async def get_all_open_data_info(self) -> List[Dict[str, Any]]:
+    async def get_all_open_api_info(self) -> List[Dict[str, Any]]:
         try:
-            documents = await OpenDataInfo.find_all().to_list()
+            documents = await OpenAPIInfo.find_all().to_list()
             return [doc.model_dump() for doc in documents]
         except Exception as e:
-            logger.error(f"OpenDataInfo 조회 중 오류 발생: {e}")
+            logger.error(f"OpenAPIInfo 조회 중 오류 발생: {e}")
+            raise
+
+    async def get_all_open_file_info(self) -> List[Dict[str, Any]]:
+        try:
+            documents = await OpenFileInfo.find_all().to_list()
+            return [doc.model_dump() for doc in documents]
+        except Exception as e:
+            logger.error(f"OpenFileInfo 조회 중 오류 발생: {e}")
             raise
 
     def create_elasticsearch_index(self):
@@ -163,19 +171,40 @@ class TitleIndexer:
 
     def index_documents(self, documents: List[Dict[str, Any]]):
         try:
+            api_count = 0
+            file_count = 0
+
             for doc in documents:
-                es_doc = {
-                    "list_id": doc.get("list_id"),
-                    "list_title": doc.get("list_title", ""),
-                    "title": doc.get("title", ""),
-                    "category_nm": doc.get("category_nm", ""),
-                    "dept_nm": doc.get("dept_nm", ""),
-                    "org_nm": doc.get("org_nm", ""),
-                    "keywords": doc.get("keywords", []),
-                    "desc": doc.get("desc", ""),
-                    "data_format": doc.get("data_format", ""),
-                    "api_type": doc.get("api_type", "")
-                }
+                if "request_cnt" in doc:
+                    es_doc = {
+                        "list_id": doc.get("list_id"),
+                        "list_title": doc.get("list_title", ""),
+                        "title": doc.get("title_en", ""),
+                        "category_nm": doc.get("category_nm", ""),
+                        "dept_nm": doc.get("dept_nm", ""),
+                        "org_nm": doc.get("org_nm", ""),
+                        "keywords": doc.get("keywords", []),
+                        "desc": doc.get("desc", ""),
+                        "data_format": doc.get("data_format", ""),
+                        "api_type": doc.get("api_type", ""),
+                        "data_type": "API"
+                    }
+                    api_count += 1
+                else:
+                    es_doc = {
+                        "list_id": doc.get("list_id"),
+                        "list_title": doc.get("list_title", ""),
+                        "title": doc.get("title", ""),
+                        "category_nm": doc.get("new_category_nm", ""),
+                        "dept_nm": doc.get("dept_nm", ""),
+                        "org_nm": doc.get("org_nm", ""),
+                        "keywords": doc.get("keywords", []),
+                        "desc": doc.get("desc", ""),
+                        "data_format": doc.get("data_type", ""),
+                        "api_type": "FILE",
+                        "data_type": "FILE"
+                    }
+                    file_count += 1
 
                 self.es.index(
                     index=self.index_name,
@@ -184,7 +213,7 @@ class TitleIndexer:
                 )
 
             self.es.indices.refresh(index=self.index_name)
-            logger.info(f"{len(documents)}개의 문서가 성공적으로 인덱싱되었습니다.")
+            logger.info(f"인덱싱 완료! API: {api_count}개, File: {file_count}개, 총 {len(documents)}개")
         except Exception as e:
             logger.error(f"문서 인덱싱 중 오류 발생: {e}")
             raise
@@ -194,20 +223,21 @@ class TitleIndexer:
         try:
             mongo_client = await self.initialize_beanie()
 
-            # 1. MongoDB에서 데이터 조회
-            documents = await self.get_all_open_data_info()
+            api_documents = await self.get_all_open_api_info()
+            logger.info(f"API 데이터 {len(api_documents)}개 조회 완료")
 
-            if not documents:
-                logger.warning("인덱싱할 문서가 없습니다.")
-                return
+            file_documents = await self.get_all_open_file_info()
+            logger.info(f"File 데이터 {len(file_documents)}개 조회 완료")
 
-            # 2. Elasticsearch 인덱스 생성
+            all_documents = api_documents + file_documents
+            logger.info(
+                f"총 {len(all_documents)}개의 문서 "
+                f"(API: {len(api_documents)}, File: {len(file_documents)})"
+            )
+
             self.create_elasticsearch_index()
+            self.index_documents(all_documents)
 
-            # 3. 문서 인덱싱
-            self.index_documents(documents)
-
-            # 4. 인덱스 통계 출력
             stats = self.es.indices.stats(index=self.index_name)
             total_docs = stats["indices"][self.index_name]["total"]["docs"]["count"]
             logger.info(f"인덱싱 완료! 총 {total_docs}개의 문서가 인덱싱되었습니다.")

@@ -1,6 +1,6 @@
 from beanie import init_beanie
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from models import APIStdDocument, OpenDataInfo, ParsedAPIInfo
+from models import OpenAPIInfo, OpenFileInfo
 
 
 class MongoDB:
@@ -9,7 +9,7 @@ class MongoDB:
         client = AsyncIOMotorClient(mongo_uri)
         await init_beanie(
             database=AsyncIOMotorDatabase(client, database_name),
-            document_models=[APIStdDocument, OpenDataInfo, ParsedAPIInfo],
+            document_models=[OpenAPIInfo, OpenFileInfo],
         )
 
     @classmethod
