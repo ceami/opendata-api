@@ -6,7 +6,7 @@
 - **문서 API**: 생성된 API/File 문서 목록 조회
 - **문서 상세 API**: 특정 list_id의 API 표준 문서 상세 정보 조회
 
-내부적으로 검색/문서 도구는 `mcp.dev.ezrnd.co.kr`(HTTPS) 백엔드를 사용합니다.
+내부적으로 검색/문서 도구는 `mcp.ezrnd.co.kr`(HTTPS) 백엔드를 사용합니다.
 
 ## 요구사항
 
