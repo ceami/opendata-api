@@ -1,4 +1,16 @@
-from beanie.operators import In
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.from beanie.operators import In
 from fastapi import APIRouter, Query, status, HTTPException, Depends
 from typing import List
 
@@ -9,12 +21,12 @@ from models import (
     GeneratedAPIDocs,
     GeneratedFileDocs,
     OpenAPIInfo,
-    OpenFileInfo
+    OpenFileInfo,
 )
 from schemas.response import (
     IndexStatsResponse,
     SearchWithDocsDetailItem,
-    SearchWithDocsDetailResponse
+    SearchWithDocsDetailResponse,
 )
 
 search_router = APIRouter(prefix="/search", tags=["search"])
@@ -23,11 +35,13 @@ search_router = APIRouter(prefix="/search", tags=["search"])
 @search_router.get(
     path="/title",
     response_model=SearchWithDocsDetailResponse,
-    responses=create_openapi_http_exception_doc([
-        status.HTTP_400_BAD_REQUEST,
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    ]),
+    responses=create_openapi_http_exception_doc(
+        [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ]
+    ),
     description="제목으로 공공데이터 검색 (생성된 문서가 있는 API/File, 엔드포인트 설명 포함)",
 )
 async def search_titles(
@@ -36,7 +50,6 @@ async def search_titles(
     page_size: int = Query(10, ge=1, le=100, description="페이지 크기"),
     search_service: SearchService = Depends(get_search_service),
 ):
-
     try:
         api_doc_list_ids = await GeneratedAPIDocs.find().to_list()
         file_doc_list_ids = await GeneratedFileDocs.find().to_list()
@@ -47,9 +60,7 @@ async def search_titles(
         from_ = 0
 
         hits = search_service.search_titles_with_weights(
-            queries=query,
-            size=search_size,
-            from_=from_
+            queries=query, size=search_size, from_=from_
         )
 
         filtered_hits = []
@@ -82,7 +93,7 @@ async def search_titles(
             for doc in api_docs_data:
                 api_docs[doc.list_id] = {
                     "data_type": "API",
-                    "detail": doc.detail if hasattr(doc, 'detail') else None
+                    "detail": doc.detail if hasattr(doc, "detail") else None,
                 }
 
         file_docs = {}
@@ -94,7 +105,7 @@ async def search_titles(
             for doc in file_docs_data:
                 file_docs[doc.list_id] = {
                     "data_type": "FILE",
-                    "detail": doc.detail if hasattr(doc, 'detail') else None
+                    "detail": doc.detail if hasattr(doc, "detail") else None,
                 }
 
         open_api_info = {}
@@ -136,20 +147,30 @@ async def search_titles(
                 data_type = doc_data["data_type"]
                 detail = doc_data.get("detail")
                 org_nm = open_api_info.get(list_id_int, {}).get("org_nm")
-                list_title = open_api_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
-                title = open_api_info.get(list_id_int, {}).get("title") or source.get("title", "")
+                list_title = open_api_info.get(list_id_int, {}).get(
+                    "list_title"
+                ) or source.get("list_title", "")
+                title = open_api_info.get(list_id_int, {}).get(
+                    "title"
+                ) or source.get("title", "")
 
             elif list_id_int in file_docs:
                 doc_data = file_docs[list_id_int]
                 data_type = doc_data["data_type"]
                 detail = doc_data.get("detail")
                 org_nm = open_file_info.get(list_id_int, {}).get("org_nm")
-                list_title = open_file_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
-                title = open_file_info.get(list_id_int, {}).get("title") or source.get("title", "")
+                list_title = open_file_info.get(list_id_int, {}).get(
+                    "list_title"
+                ) or source.get("list_title", "")
+                title = open_file_info.get(list_id_int, {}).get(
+                    "title"
+                ) or source.get("title", "")
 
             else:
                 detail = None
-                org_nm = open_api_info.get(list_id_int, {}).get("org_nm") or open_file_info.get(list_id_int, {}).get("org_nm")
+                org_nm = open_api_info.get(list_id_int, {}).get(
+                    "org_nm"
+                ) or open_file_info.get(list_id_int, {}).get("org_nm")
                 list_title = source.get("list_title", "")
                 title = source.get("title", "")
 
@@ -160,7 +181,7 @@ async def search_titles(
                 org_nm=org_nm,
                 score=hit.get("_score"),
                 data_type=data_type,
-                detail=detail
+                detail=detail,
             )
             results.append(item)
 
@@ -168,7 +189,7 @@ async def search_titles(
             total=len(filtered_hits),
             page=page,
             page_size=page_size,
-            results=results
+            results=results,
         ).model_dump(by_alias=True)
 
     except Exception as e:
@@ -178,11 +199,13 @@ async def search_titles(
 @search_router.get(
     path="/title/std-docs",
     response_model=SearchWithDocsDetailResponse,
-    responses=create_openapi_http_exception_doc([
-        status.HTTP_400_BAD_REQUEST,
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    ]),
+    responses=create_openapi_http_exception_doc(
+        [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ]
+    ),
     description="제목으로 공공 데이터 검색 (생성된 문서가 있는 API/File 필터링, 엔드포인트 설명 포함)",
 )
 async def search_titles_with_docs(
@@ -201,9 +224,7 @@ async def search_titles_with_docs(
         from_ = 0
 
         hits = search_service.search_titles(
-            query=q,
-            size=search_size,
-            from_=from_
+            query=q, size=search_size, from_=from_
         )
 
         filtered_hits = []
@@ -236,7 +257,7 @@ async def search_titles_with_docs(
             for doc in api_docs_data:
                 api_docs[doc.list_id] = {
                     "data_type": "API",
-                    "detail": doc.detail if hasattr(doc, 'detail') else None
+                    "detail": doc.detail if hasattr(doc, "detail") else None,
                 }
 
         file_docs = {}
@@ -248,7 +269,7 @@ async def search_titles_with_docs(
             for doc in file_docs_data:
                 file_docs[doc.list_id] = {
                     "data_type": "FILE",
-                    "detail": doc.detail if hasattr(doc, 'detail') else None
+                    "detail": doc.detail if hasattr(doc, "detail") else None,
                 }
 
         open_api_info = {}
@@ -290,20 +311,30 @@ async def search_titles_with_docs(
                 data_type = doc_data["data_type"]
                 detail = doc_data.get("detail")
                 org_nm = open_api_info.get(list_id_int, {}).get("org_nm")
-                list_title = open_api_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
-                title = open_api_info.get(list_id_int, {}).get("title") or source.get("title", "")
+                list_title = open_api_info.get(list_id_int, {}).get(
+                    "list_title"
+                ) or source.get("list_title", "")
+                title = open_api_info.get(list_id_int, {}).get(
+                    "title"
+                ) or source.get("title", "")
 
             elif list_id_int in file_docs:
                 doc_data = file_docs[list_id_int]
                 data_type = doc_data["data_type"]
                 detail = doc_data.get("detail")
                 org_nm = open_file_info.get(list_id_int, {}).get("org_nm")
-                list_title = open_file_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
-                title = open_file_info.get(list_id_int, {}).get("title") or source.get("title", "")
+                list_title = open_file_info.get(list_id_int, {}).get(
+                    "list_title"
+                ) or source.get("list_title", "")
+                title = open_file_info.get(list_id_int, {}).get(
+                    "title"
+                ) or source.get("title", "")
 
             else:
                 detail = None
-                org_nm = open_api_info.get(list_id_int, {}).get("org_nm") or open_file_info.get(list_id_int, {}).get("org_nm")
+                org_nm = open_api_info.get(list_id_int, {}).get(
+                    "org_nm"
+                ) or open_file_info.get(list_id_int, {}).get("org_nm")
                 list_title = source.get("list_title", "")
                 title = source.get("title", "")
 
@@ -314,7 +345,7 @@ async def search_titles_with_docs(
                 title=title,
                 score=hit.get("_score"),
                 data_type=data_type,
-                detail=detail
+                detail=detail,
             )
             results.append(item)
 
@@ -322,7 +353,7 @@ async def search_titles_with_docs(
             total=len(filtered_hits),
             page=page,
             page_size=page_size,
-            results=results
+            results=results,
         ).model_dump(by_alias=True)
 
     except Exception as e:
@@ -332,11 +363,13 @@ async def search_titles_with_docs(
 @search_router.get(
     path="/stats",
     response_model=IndexStatsResponse,
-    responses=create_openapi_http_exception_doc([
-        status.HTTP_400_BAD_REQUEST,
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    ]),
+    responses=create_openapi_http_exception_doc(
+        [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ]
+    ),
     description="인덱스 통계 정보 조회",
 )
 async def get_index_stats(
@@ -350,7 +383,7 @@ async def get_index_stats(
             "total_docs": stats["total"]["docs"]["count"],
             "total_size": stats["total"]["store"]["size_in_bytes"],
             "indexing_stats": stats["total"]["indexing"],
-            "search_stats": stats["total"]["search"]
+            "search_stats": stats["total"]["search"],
         }
 
         return IndexStatsResponse(**response_data).model_dump(by_alias=True)

@@ -1,4 +1,16 @@
-import asyncio
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.import asyncio
 import logging
 from typing import Dict, Any, List
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -11,7 +23,7 @@ from models import (
 from schemas.response import (
     validate_pagination_params,
     calculate_offset,
-    UnifiedDataItem
+    UnifiedDataItem,
 )
 
 
@@ -25,11 +37,7 @@ class CrossCollectionService:
         self.logger = logger or logging.getLogger(__name__)
 
     async def get_unified_search_data(
-        self,
-        query: str,
-        page: int = 1,
-        size: int = 20,
-        search_service=None
+        self, query: str, page: int = 1, size: int = 20, search_service=None
     ) -> Dict[str, Any]:
         try:
             page, size = validate_pagination_params(page, size)
@@ -53,26 +61,21 @@ class CrossCollectionService:
                 "data": [item.model_dump() for item in paginated_data],
                 "total": len(all_data),
                 "page": page,
-                "size": size
+                "size": size,
             }
 
         except Exception as e:
             raise e
 
     async def _get_search_list_ids(
-        self,
-        query: str,
-        size: int,
-        search_service
+        self, query: str, size: int, search_service
     ) -> List[str]:
         if not search_service:
             return []
 
         search_size = max(size * 3, 10)
         hits = search_service.search_titles(
-            query=query,
-            size=search_size,
-            from_=0
+            query=query, size=search_size, from_=0
         )
         return [hit["_source"].get("list_id") for hit in hits["hits"]]
 
@@ -116,13 +119,15 @@ class CrossCollectionService:
                 endpoints=None,
                 has_generated_doc=generated_doc is not None,
                 token_count=generated_doc.token_count if generated_doc else 0,
-                score=None
+                score=None,
             )
             api_data.append(item)
 
         return api_data
 
-    async def _get_file_data(self, list_ids: List[str]) -> List[UnifiedDataItem]:
+    async def _get_file_data(
+        self, list_ids: List[str]
+    ) -> List[UnifiedDataItem]:
         """파일 데이터를 조회하여 UnifiedDataItem으로 변환"""
         if not list_ids:
             return []
@@ -159,7 +164,7 @@ class CrossCollectionService:
                 endpoints=None,
                 has_generated_doc=generated_doc is not None,
                 token_count=generated_doc.token_count if generated_doc else 0,
-                score=None
+                score=None,
             )
             file_data.append(item)
 
@@ -188,7 +193,7 @@ class CrossCollectionService:
         org_sort_by: str = "all",
         data_type_sort_by: str = "all",
         token_count_sort_by: str = "all",
-        status_sort_by: str = "all"
+        status_sort_by: str = "all",
     ) -> Dict[str, Any]:
         """페이지네이션된 통합 데이터를 조회"""
         try:
@@ -201,20 +206,29 @@ class CrossCollectionService:
             sort_order = -1
 
             sort_conditions = self._build_sort_conditions(
-                name_sort_by, org_sort_by, data_type_sort_by,
-                token_count_sort_by, status_sort_by, sort_field, sort_order
+                name_sort_by,
+                org_sort_by,
+                data_type_sort_by,
+                token_count_sort_by,
+                status_sort_by,
+                sort_field,
+                sort_order,
             )
 
             api_pipeline = self._build_api_pipeline(sort_conditions)
-            file_pipeline = self._build_file_pipeline(
-                sort_conditions, sort_by
+            file_pipeline = self._build_file_pipeline(sort_conditions, sort_by)
+
+            self.logger.info(
+                "[CrossCollectionService] MongoDB Aggregation 실행 시작"
             )
 
-            self.logger.info("[CrossCollectionService] MongoDB Aggregation 실행 시작")
-
             api_result, file_result = await asyncio.gather(
-                self.open_data_db.open_data_info.aggregate(api_pipeline).to_list(),
-                self.open_data_db.open_file_info.aggregate(file_pipeline).to_list()
+                self.open_data_db.open_data_info.aggregate(
+                    api_pipeline
+                ).to_list(),
+                self.open_data_db.open_file_info.aggregate(
+                    file_pipeline
+                ).to_list(),
             )
 
             api_data = api_result if api_result else []
@@ -224,7 +238,9 @@ class CrossCollectionService:
             self._normalize_request_counts(api_data, file_data)
 
             unique_data = self._merge_and_deduplicate_data(api_data, file_data)
-            unique_data.sort(key=lambda x: x.get("request_cnt", 0), reverse=True)
+            unique_data.sort(
+                key=lambda x: x.get("request_cnt", 0), reverse=True
+            )
 
             start_idx = offset
             end_idx = start_idx + size
@@ -241,11 +257,13 @@ class CrossCollectionService:
                 "data": paginated_data,
                 "total": total_count,
                 "page": page,
-                "size": size
+                "size": size,
             }
 
         except Exception as e:
-            self.logger.error(f"[CrossCollectionService] 데이터 조회 오류: {str(e)}")
+            self.logger.error(
+                f"[CrossCollectionService] 데이터 조회 오류: {str(e)}"
+            )
             raise e
 
     def _build_sort_conditions(
@@ -256,7 +274,7 @@ class CrossCollectionService:
         token_count_sort_by: str,
         status_sort_by: str,
         sort_field: str,
-        sort_order: int
+        sort_order: int,
     ) -> Dict[str, int]:
         sort_conditions = {}
 
@@ -288,7 +306,9 @@ class CrossCollectionService:
         sort_conditions[sort_field] = sort_order
         return sort_conditions
 
-    def _build_api_pipeline(self, sort_conditions: Dict[str, int]) -> List[Dict]:
+    def _build_api_pipeline(
+        self, sort_conditions: Dict[str, int]
+    ) -> List[Dict]:
         """API 데이터용 MongoDB 파이프라인을 구성"""
         return [
             {
@@ -296,7 +316,7 @@ class CrossCollectionService:
                     "from": "generated_api_docs",
                     "localField": "list_id",
                     "foreignField": "list_id",
-                    "as": "generated_docs"
+                    "as": "generated_docs",
                 }
             },
             {
@@ -309,27 +329,30 @@ class CrossCollectionService:
                     "token_count": {
                         "$cond": [
                             {"$gt": [{"$size": "$generated_docs"}, 0]},
-                            {"$arrayElemAt": ["$generated_docs.token_count", 0]},
-                            0
+                            {
+                                "$arrayElemAt": [
+                                    "$generated_docs.token_count",
+                                    0,
+                                ]
+                            },
+                            0,
                         ]
                     },
                     "has_generated_doc": {
                         "$cond": [
                             {"$gt": [{"$size": "$generated_docs"}, 0]},
                             True,
-                            False
+                            False,
                         ]
                     },
-                    "data_type": {"$literal": "API"}
+                    "data_type": {"$literal": "API"},
                 }
             },
-            {"$sort": sort_conditions}
+            {"$sort": sort_conditions},
         ]
 
     def _build_file_pipeline(
-        self,
-        sort_conditions: Dict[str, int],
-        sort_by: str
+        self, sort_conditions: Dict[str, int], sort_by: str
     ) -> List[Dict]:
         """파일 데이터용 MongoDB 파이프라인을 구성"""
         file_sort_conditions = sort_conditions.copy()
@@ -345,7 +368,7 @@ class CrossCollectionService:
                     "from": "generated_file_docs",
                     "localField": "list_id",
                     "foreignField": "list_id",
-                    "as": "generated_docs"
+                    "as": "generated_docs",
                 }
             },
             {
@@ -358,21 +381,26 @@ class CrossCollectionService:
                     "token_count": {
                         "$cond": [
                             {"$gt": [{"$size": "$generated_docs"}, 0]},
-                            {"$arrayElemAt": ["$generated_docs.token_count", 0]},
-                            0
+                            {
+                                "$arrayElemAt": [
+                                    "$generated_docs.token_count",
+                                    0,
+                                ]
+                            },
+                            0,
                         ]
                     },
                     "has_generated_doc": {
                         "$cond": [
                             {"$gt": [{"$size": "$generated_docs"}, 0]},
                             True,
-                            False
+                            False,
                         ]
                     },
-                    "data_type": {"$literal": "FILE"}
+                    "data_type": {"$literal": "FILE"},
                 }
             },
-            {"$sort": file_sort_conditions}
+            {"$sort": file_sort_conditions},
         ]
 
     def _log_data_samples(self, api_data: List, file_data: List) -> None:
@@ -386,7 +414,9 @@ class CrossCollectionService:
                 f"[CrossCollectionService] File 데이터 샘플: {file_data[0]}"
             )
 
-    def _normalize_request_counts(self, api_data: List, file_data: List) -> None:
+    def _normalize_request_counts(
+        self, api_data: List, file_data: List
+    ) -> None:
         """요청 카운트를 정규화"""
         for item in api_data:
             item["request_cnt"] = item.get("request_cnt", 0)
@@ -395,9 +425,7 @@ class CrossCollectionService:
             item["request_cnt"] = item.get("download_cnt", 0)
 
     def _merge_and_deduplicate_data(
-        self,
-        api_data: List,
-        file_data: List
+        self, api_data: List, file_data: List
     ) -> List:
         """API와 파일 데이터를 합치고 중복을 제거"""
         all_data = api_data + file_data
@@ -442,15 +470,15 @@ class CrossCollectionService:
                 "api_docs_count": total_api_docs,
                 "file_data_count": total_file_data,
                 "file_docs_count": total_file_docs,
-                "api_coverage": (
-                    total_api_docs / total_api_data * 100
-                ) if total_api_data > 0 else 0,
-                "file_coverage": (
-                    total_file_docs / total_file_data * 100
-                ) if total_file_data > 0 else 0,
-                "total_coverage": (
-                    total_generated_docs / total_open_data * 100
-                ) if total_open_data > 0 else 0
+                "api_coverage": (total_api_docs / total_api_data * 100)
+                if total_api_data > 0
+                else 0,
+                "file_coverage": (total_file_docs / total_file_data * 100)
+                if total_file_data > 0
+                else 0,
+                "total_coverage": (total_generated_docs / total_open_data * 100)
+                if total_open_data > 0
+                else 0,
             }
 
         except Exception:

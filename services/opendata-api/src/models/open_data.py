@@ -1,4 +1,16 @@
-from beanie import Document
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.from beanie import Document
 from datetime import datetime
 from typing import Literal, Dict, Any
 import pymongo
@@ -60,10 +72,14 @@ class OpenFileInfo(Document):
             [("updated_at", pymongo.DESCENDING)],
             [("list_title", pymongo.ASCENDING)],
             [("org_nm", pymongo.ASCENDING)],
-            [("list_id", pymongo.ASCENDING),
-             ("download_cnt", pymongo.DESCENDING)],
-            [("list_id", pymongo.ASCENDING),
-             ("updated_at", pymongo.DESCENDING)],
+            [
+                ("list_id", pymongo.ASCENDING),
+                ("download_cnt", pymongo.DESCENDING),
+            ],
+            [
+                ("list_id", pymongo.ASCENDING),
+                ("updated_at", pymongo.DESCENDING),
+            ],
         ]
 
 
@@ -143,12 +159,18 @@ class OpenAPIInfo(Document):
             [("updated_at", pymongo.DESCENDING)],
             [("list_title", pymongo.ASCENDING)],
             [("org_nm", pymongo.ASCENDING)],
-            [("list_id", pymongo.ASCENDING),
-             ("request_cnt", pymongo.DESCENDING)],
-            [("list_id", pymongo.ASCENDING),
-             ("updated_at", pymongo.DESCENDING)],
-            [("request_cnt", pymongo.DESCENDING),
-             ("updated_at", pymongo.DESCENDING)],
+            [
+                ("list_id", pymongo.ASCENDING),
+                ("request_cnt", pymongo.DESCENDING),
+            ],
+            [
+                ("list_id", pymongo.ASCENDING),
+                ("updated_at", pymongo.DESCENDING),
+            ],
+            [
+                ("request_cnt", pymongo.DESCENDING),
+                ("updated_at", pymongo.DESCENDING),
+            ],
         ]
 
 
@@ -266,8 +288,10 @@ class GeneratedAPIDocs(Document):
             [("list_id", pymongo.ASCENDING)],
             [("token_count", pymongo.DESCENDING)],
             [("generated_at", pymongo.DESCENDING)],
-            [("list_id", pymongo.ASCENDING),
-             ("token_count", pymongo.DESCENDING)],
+            [
+                ("list_id", pymongo.ASCENDING),
+                ("token_count", pymongo.DESCENDING),
+            ],
         ]
 
 
@@ -291,7 +315,10 @@ class GeneratedFileDocs(Document):
             [("list_id", pymongo.ASCENDING)],
             [("token_count", pymongo.DESCENDING)],
             [("generated_at", pymongo.DESCENDING)],
-            [("list_id", pymongo.ASCENDING), ("token_count", pymongo.DESCENDING)],
+            [
+                ("list_id", pymongo.ASCENDING),
+                ("token_count", pymongo.DESCENDING),
+            ],
         ]
 
 

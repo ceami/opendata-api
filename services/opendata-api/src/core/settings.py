@@ -1,4 +1,16 @@
-import os
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.import os
 from typing import List, Optional, Type
 from functools import lru_cache
 
@@ -46,7 +58,9 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="log_level")
 
     title: str = Field(default="ODM API", alias="title")
-    description: str = Field(default="ODM API 서비스를 위한 REST API", alias="description")
+    description: str = Field(
+        default="ODM API 서비스를 위한 REST API", alias="description"
+    )
     version: str = Field(default="0.0.1", alias="version")
     root_path: str = Field(default="", alias="root_path")
 
@@ -66,9 +80,7 @@ class Settings(BaseSettings):
     MONGO_URL: str = Field(
         default="mongodb://localhost:27017", alias="MONGO_URL"
     )
-    MONGO_DB: str = Field(
-        default="open_data", alias="MONGO_DB"
-    )
+    MONGO_DB: str = Field(default="open_data", alias="MONGO_DB")
 
     ELASTICSEARCH_URL: str = Field(
         default="http://localhost:9200", alias="ELASTICSEARCH_URL"

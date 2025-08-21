@@ -1,3 +1,16 @@
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 from beanie.operators import Eq, In
 from fastapi import APIRouter, Query, Path, status, HTTPException, Depends
 from typing import Dict, Any, List
@@ -14,7 +27,11 @@ from models import (
     SavedRequest,
 )
 from core.exceptions import create_openapi_http_exception_doc
-from core.dependencies import get_cross_collection_service, get_search_service, get_logger_service
+from core.dependencies import (
+    get_cross_collection_service,
+    get_search_service,
+    get_logger_service,
+)
 from service.cross_collection import CrossCollectionService
 from service.search import SearchService
 from schemas.response import (
@@ -25,7 +42,7 @@ from schemas.response import (
     SuccessRateResponse,
     convert_generated_document_to_camel_case,
     GeneratedDocumentResponse,
-    SaveRequestBody
+    SaveRequestBody,
 )
 
 
@@ -41,33 +58,54 @@ document_router = APIRouter(prefix="/document", tags=["document"])
 @document_router.get(
     path="",
     response_model=PaginatedResponse[Dict[str, Any]],
-    responses=create_openapi_http_exception_doc([
-        status.HTTP_400_BAD_REQUEST,
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    ]),
+    responses=create_openapi_http_exception_doc(
+        [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ]
+    ),
     description="Frontend용 통합 API - 검색 / 데이터 제공 (API + File)",
 )
 async def get_frontend_data(
     q: str = Query(None, description="검색 키워드"),
     page: int = Query(1, ge=1, description="페이지 번호"),
     size: int = Query(20, ge=1, le=100, description="페이지 크기"),
-    sort_by: str = Query("popular", description="정렬 기준 (popular: request_cnt 순, trending: updated_at 순)"),
-    name_sort_by: str = Query("all", description="이름 정렬 기준 (asc: 오름차순, desc: 내림차순)"),
-    org_sort_by: str = Query("all", description="조직 정렬 기준 (asc: 오름차순, desc: 내림차순)"),
-    data_type_sort_by: str = Query("all", description="데이터 타입 정렬 기준  (asc: 오름차순, desc: 내림차순)"),
-    token_count_sort_by: str = Query("all", description="토큰 수 정렬 기준  (asc: 오름차순, desc: 내림차순)"),
-    status_sort_by: str = Query("all", description="상태 정렬 기준  (asc: 오름차순, desc: 내림차순)"),
+    sort_by: str = Query(
+        "popular",
+        description="정렬 기준 (popular: request_cnt 순, trending: updated_at 순)",
+    ),
+    name_sort_by: str = Query(
+        "all", description="이름 정렬 기준 (asc: 오름차순, desc: 내림차순)"
+    ),
+    org_sort_by: str = Query(
+        "all", description="조직 정렬 기준 (asc: 오름차순, desc: 내림차순)"
+    ),
+    data_type_sort_by: str = Query(
+        "all",
+        description="데이터 타입 정렬 기준  (asc: 오름차순, desc: 내림차순)",
+    ),
+    token_count_sort_by: str = Query(
+        "all", description="토큰 수 정렬 기준  (asc: 오름차순, desc: 내림차순)"
+    ),
+    status_sort_by: str = Query(
+        "all", description="상태 정렬 기준  (asc: 오름차순, desc: 내림차순)"
+    ),
     exact_match: bool = Query(False, description="정확한 매칭 여부"),
     min_score: float = Query(None, description="최소 점수 필터링"),
     use_adaptive_filtering: bool = Query(True, description="자동 필터링 사용"),
     search_service: SearchService = Depends(get_search_service),
-    cross_collection_service: CrossCollectionService = Depends(get_cross_collection_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("document_router")),
+    cross_collection_service: CrossCollectionService = Depends(
+        get_cross_collection_service
+    ),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_router")
+    ),
 ):
-
     try:
-        logger.info(f"[Document] get_frontend_data_v2 호출: q={q}, page={page}, size={size}, sort_by={sort_by}")
+        logger.info(
+            f"[Document] get_frontend_data_v2 호출: q={q}, page={page}, size={size}, sort_by={sort_by}"
+        )
         if q and q.strip():
             from_ = (page - 1) * size
 
@@ -105,7 +143,7 @@ async def get_frontend_data(
                     api_data_info[doc.list_id] = {
                         "list_title": doc.list_title,
                         "org_nm": doc.org_nm,
-                        "data_type": "API"
+                        "data_type": "API",
                     }
 
                 file_docs = await OpenFileInfo.find(
@@ -114,9 +152,11 @@ async def get_frontend_data(
 
                 for doc in file_docs:
                     file_data_info[doc.list_id] = {
-                        "list_title": getattr(doc, "list_title", None) or getattr(doc, "title", None),
-                        "org_nm": getattr(doc, "org_nm", None) or getattr(doc, "dept_nm", None),
-                        "data_type": "FILE"
+                        "list_title": getattr(doc, "list_title", None)
+                        or getattr(doc, "title", None),
+                        "org_nm": getattr(doc, "org_nm", None)
+                        or getattr(doc, "dept_nm", None),
+                        "data_type": "FILE",
                     }
 
             api_generated_docs = {}
@@ -131,7 +171,7 @@ async def get_frontend_data(
                     api_generated_docs[doc.list_id] = {
                         "token_count": doc.token_count,
                         "has_generated_doc": True,
-                        "generated_at": getattr(doc, 'generated_at', None)
+                        "generated_at": getattr(doc, "generated_at", None),
                     }
 
                 generated_file_docs = await GeneratedFileDocs.find(
@@ -142,7 +182,7 @@ async def get_frontend_data(
                     file_generated_docs[doc.list_id] = {
                         "token_count": doc.token_count,
                         "has_generated_doc": True,
-                        "generated_at": getattr(doc, 'generated_at', None)
+                        "generated_at": getattr(doc, "generated_at", None),
                     }
 
             results = []
@@ -164,7 +204,9 @@ async def get_frontend_data(
                         has_generated_doc = False
                         generated_at = None
 
-                    generated_at_str = generated_at.isoformat() if generated_at else None
+                    generated_at_str = (
+                        generated_at.isoformat() if generated_at else None
+                    )
 
                     item = SearchWithDocsItem(
                         list_id=list_id,
@@ -190,7 +232,9 @@ async def get_frontend_data(
                         has_generated_doc = False
                         generated_at = None
 
-                    generated_at_str = generated_at.isoformat() if generated_at else None
+                    generated_at_str = (
+                        generated_at.isoformat() if generated_at else None
+                    )
 
                     item = SearchWithDocsItem(
                         list_id=list_id,
@@ -208,7 +252,9 @@ async def get_frontend_data(
                     token_count = generated_info["token_count"]
                     has_generated_doc = generated_info["has_generated_doc"]
                     generated_at = generated_info["generated_at"]
-                    generated_at_str = generated_at.isoformat() if generated_at else None
+                    generated_at_str = (
+                        generated_at.isoformat() if generated_at else None
+                    )
                     org_nm = None
 
                     if list_id in api_data_info:
@@ -245,12 +291,15 @@ async def get_frontend_data(
                 items=results,
                 total=hits["total"]["value"],
                 page=page,
-                size=size
+                size=size,
             )
 
         else:
             if sort_by not in ["popular", "trending", "all"]:
-                raise HTTPException(status_code=400, detail="sort_by는 'popular' 또는 'trending'이어야 합니다")
+                raise HTTPException(
+                    status_code=400,
+                    detail="sort_by는 'popular' 또는 'trending'이어야 합니다",
+                )
 
             result = await cross_collection_service.get_unified_data_paginated(
                 page=page,
@@ -260,7 +309,7 @@ async def get_frontend_data(
                 org_sort_by=org_sort_by,
                 data_type_sort_by=data_type_sort_by,
                 token_count_sort_by=token_count_sort_by,
-                status_sort_by=status_sort_by
+                status_sort_by=status_sort_by,
             )
 
             formatted_items = []
@@ -270,15 +319,21 @@ async def get_frontend_data(
 
                 generated_at = None
                 if data_type == "API":
-                    api_doc = await GeneratedAPIDocs.find_one({"list_id": list_id})
+                    api_doc = await GeneratedAPIDocs.find_one(
+                        {"list_id": list_id}
+                    )
                     if api_doc:
-                        generated_at = getattr(api_doc, 'generated_at', None)
+                        generated_at = getattr(api_doc, "generated_at", None)
                 else:
-                    file_doc = await GeneratedFileDocs.find_one({"list_id": list_id})
+                    file_doc = await GeneratedFileDocs.find_one(
+                        {"list_id": list_id}
+                    )
                     if file_doc:
-                        generated_at = getattr(file_doc, 'generated_at', None)
+                        generated_at = getattr(file_doc, "generated_at", None)
 
-                generated_at_str = format_datetime(generated_at) if generated_at else None
+                generated_at_str = (
+                    format_datetime(generated_at) if generated_at else None
+                )
 
                 formatted_item = SearchWithDocsItem(
                     list_id=list_id,
@@ -292,12 +347,14 @@ async def get_frontend_data(
                 )
                 formatted_items.append(formatted_item.model_dump(by_alias=True))
 
-            logger.info(f"[Document] get_frontend_data_v2 완료: 검색 결과 {len(formatted_items)}개")
+            logger.info(
+                f"[Document] get_frontend_data_v2 완료: 검색 결과 {len(formatted_items)}개"
+            )
             return create_paginated_response(
                 items=formatted_items,
                 total=result["total"],
                 page=result["page"],
-                size=result["size"]
+                size=result["size"],
             )
 
     except Exception as e:
@@ -308,15 +365,19 @@ async def get_frontend_data(
 @document_router.get(
     path="/std-docs",
     response_model=List[GeneratedDocumentResponse],
-    responses=create_openapi_http_exception_doc([
-        status.HTTP_400_BAD_REQUEST,
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    ]),
+    responses=create_openapi_http_exception_doc(
+        [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ]
+    ),
     description="생성된 API/File 문서 목록 조회",
 )
 async def get_generated_documents(
-    list_ids: List[int] = Query(None, description="조회할 list_id 목록 (미입력시 전체 조회)"),
+    list_ids: List[int] = Query(
+        None, description="조회할 list_id 목록 (미입력시 전체 조회)"
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ):
@@ -324,26 +385,50 @@ async def get_generated_documents(
         result = []
 
         if list_ids:
-            api_docs = await GeneratedAPIDocs.find(
-                In(GeneratedAPIDocs.list_id, list_ids)
-            ).skip((page - 1) * page_size).limit(page_size).to_list()
+            api_docs = (
+                await GeneratedAPIDocs.find(
+                    In(GeneratedAPIDocs.list_id, list_ids)
+                )
+                .skip((page - 1) * page_size)
+                .limit(page_size)
+                .to_list()
+            )
         else:
-            api_docs = await GeneratedAPIDocs.find().skip((page - 1) * page_size).limit(page_size).to_list()
+            api_docs = (
+                await GeneratedAPIDocs.find()
+                .skip((page - 1) * page_size)
+                .limit(page_size)
+                .to_list()
+            )
 
         for doc in api_docs:
-            camel_case_dict = convert_generated_document_to_camel_case(doc.model_dump(), "API")
+            camel_case_dict = convert_generated_document_to_camel_case(
+                doc.model_dump(), "API"
+            )
             schema_obj = GeneratedDocumentResponse(**camel_case_dict)
             result.append(schema_obj.model_dump(by_alias=True))
 
         if list_ids:
-            file_docs = await GeneratedFileDocs.find(
-                In(GeneratedFileDocs.list_id, list_ids)
-            ).skip((page - 1) * page_size).limit(page_size).to_list()
+            file_docs = (
+                await GeneratedFileDocs.find(
+                    In(GeneratedFileDocs.list_id, list_ids)
+                )
+                .skip((page - 1) * page_size)
+                .limit(page_size)
+                .to_list()
+            )
         else:
-            file_docs = await GeneratedFileDocs.find().skip((page - 1) * page_size).limit(page_size).to_list()
+            file_docs = (
+                await GeneratedFileDocs.find()
+                .skip((page - 1) * page_size)
+                .limit(page_size)
+                .to_list()
+            )
 
         for doc in file_docs:
-            camel_case_dict = convert_generated_document_to_camel_case(doc.model_dump(), "FILE")
+            camel_case_dict = convert_generated_document_to_camel_case(
+                doc.model_dump(), "FILE"
+            )
             schema_obj = GeneratedDocumentResponse(**camel_case_dict)
             result.append(schema_obj.model_dump(by_alias=True))
 
@@ -356,23 +441,29 @@ async def get_generated_documents(
 @document_router.get(
     path="/success-rate",
     response_model=SuccessRateResponse,
-    responses=create_openapi_http_exception_doc([
-        status.HTTP_400_BAD_REQUEST,
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    ]),
+    responses=create_openapi_http_exception_doc(
+        [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ]
+    ),
     description="성공률 조회",
 )
 async def get_success_rate():
     try:
         total_open_data = await OpenAPIInfo.count()
         total_std_docs = await GeneratedAPIDocs.count()
-        success_rate = (total_std_docs / total_open_data * 100) if total_open_data > 0 else 0
+        success_rate = (
+            (total_std_docs / total_open_data * 100)
+            if total_open_data > 0
+            else 0
+        )
 
         return SuccessRateResponse(
             total_open_data=total_open_data,
             total_std_docs=total_std_docs,
-            success_rate=round(success_rate, 2)
+            success_rate=round(success_rate, 2),
         ).model_dump(by_alias=True)
 
     except Exception as e:
@@ -382,11 +473,13 @@ async def get_success_rate():
 @document_router.get(
     path="/std-docs/{list_id}",
     response_model=DocumentWithParsedInfo,
-    responses=create_openapi_http_exception_doc([
-        status.HTTP_400_BAD_REQUEST,
-        status.HTTP_404_NOT_FOUND,
-        status.HTTP_500_INTERNAL_SERVER_ERROR,
-    ]),
+    responses=create_openapi_http_exception_doc(
+        [
+            status.HTTP_400_BAD_REQUEST,
+            status.HTTP_404_NOT_FOUND,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ]
+    ),
     description="API 표준 문서 상세 조회 (API + File)",
 )
 async def get_api_std_document(
@@ -407,16 +500,24 @@ async def get_api_std_document(
             list_title=open_api_info.list_title if open_api_info else None,
             detail_url=f"https://www.data.go.kr/data/{list_id}/openapi.do",
             generated_status=True,
-            created_at=format_datetime(open_api_info.created_at) if open_api_info else None,
-            updated_at=format_datetime(open_api_info.updated_at) if open_api_info else None,
-            description=open_api_info.desc.replace('<br/>', '\n') if open_api_info and open_api_info.desc else None,
+            created_at=format_datetime(open_api_info.created_at)
+            if open_api_info
+            else None,
+            updated_at=format_datetime(open_api_info.updated_at)
+            if open_api_info
+            else None,
+            description=open_api_info.desc.replace("<br/>", "\n")
+            if open_api_info and open_api_info.desc
+            else None,
             org_nm=open_api_info.org_nm if open_api_info else None,
             dept_nm=open_api_info.dept_nm if open_api_info else None,
             is_charged=open_api_info.is_charged if open_api_info else None,
             share_scope_nm=open_api_info.share_scope_nm,
             keywords=open_api_info.keywords if open_api_info else [],
             token_count=api_document.token_count,
-            generated_at=format_datetime(api_document.generated_at) if api_document and api_document.generated_at else None,
+            generated_at=format_datetime(api_document.generated_at)
+            if api_document and api_document.generated_at
+            else None,
             markdown=api_document.markdown,
         ).model_dump(by_alias=True)
 
@@ -432,28 +533,34 @@ async def get_api_std_document(
         return DocumentWithParsedInfo(
             list_id=file_document.list_id,
             data_type="FILE",
-            list_title=getattr(open_file_info, "list_title", None) or getattr(open_file_info, "title", None),
+            list_title=getattr(open_file_info, "list_title", None)
+            or getattr(open_file_info, "title", None),
             detail_url=f"https://www.data.go.kr/data/{list_id}/fileData.do",
             generated_status=file_document is not None,
-            created_at=format_datetime(open_file_info.created_at) if open_file_info else None,
-            updated_at=format_datetime(open_file_info.updated_at) if open_file_info else None,
-            description=open_file_info.desc.replace('<br/>', '\n') if open_file_info and open_file_info.desc else None,
+            created_at=format_datetime(open_file_info.created_at)
+            if open_file_info
+            else None,
+            updated_at=format_datetime(open_file_info.updated_at)
+            if open_file_info
+            else None,
+            description=open_file_info.desc.replace("<br/>", "\n")
+            if open_file_info and open_file_info.desc
+            else None,
             org_nm=open_file_info.org_nm if open_file_info else None,
             dept_nm=open_file_info.dept_nm if open_file_info else None,
             is_charged=open_file_info.is_charged if open_file_info else None,
             share_scope_nm=open_file_info.share_scope_nm,
             keywords=open_file_info.keywords if open_file_info else [],
             token_count=file_document.token_count if file_document else 0,
-            generated_at=format_datetime(file_document.generated_at) if file_document else None,
+            generated_at=format_datetime(file_document.generated_at)
+            if file_document
+            else None,
             markdown=file_document.markdown if file_document else None,
         ).model_dump(by_alias=True)
 
-    open_api_info = await OpenAPIInfo.find_one(
-        Eq(OpenAPIInfo.list_id, list_id)
-    )
+    open_api_info = await OpenAPIInfo.find_one(Eq(OpenAPIInfo.list_id, list_id))
 
     if open_api_info:
-
         return DocumentWithParsedInfo(
             list_id=open_api_info.list_id,
             data_type="API",
@@ -462,7 +569,9 @@ async def get_api_std_document(
             generated_status=False,
             created_at=format_datetime(open_api_info.created_at),
             updated_at=format_datetime(open_api_info.updated_at),
-            description=open_api_info.desc.replace('<br/>', '\n') if open_api_info.desc else None,
+            description=open_api_info.desc.replace("<br/>", "\n")
+            if open_api_info.desc
+            else None,
             org_nm=open_api_info.org_nm,
             dept_nm=open_api_info.dept_nm,
             is_charged=open_api_info.is_charged,
@@ -478,16 +587,18 @@ async def get_api_std_document(
     )
 
     if open_file_info:
-
         return DocumentWithParsedInfo(
             list_id=open_file_info.list_id,
             data_type="FILE",
-            list_title=getattr(open_file_info, "list_title", None) or getattr(open_file_info, "title", None),
+            list_title=getattr(open_file_info, "list_title", None)
+            or getattr(open_file_info, "title", None),
             detail_url=f"https://www.data.go.kr/data/{list_id}/fileData.do",
             generated_status=False,
             created_at=format_datetime(open_file_info.created_at),
             updated_at=format_datetime(open_file_info.updated_at),
-            description=open_file_info.desc.replace('<br/>', '\n') if open_file_info.desc else None,
+            description=open_file_info.desc.replace("<br/>", "\n")
+            if open_file_info.desc
+            else None,
             org_nm=open_file_info.org_nm,
             dept_nm=open_file_info.dept_nm,
             is_charged=open_file_info.is_charged,
@@ -502,20 +613,18 @@ async def get_api_std_document(
 
 
 @document_router.post(
-    path="/save-request",
-    response_model=dict,
-    description="list_id나 url 저장"
+    path="/save-request", response_model=dict, description="list_id나 url 저장"
 )
 async def save_request(
-    body: SaveRequestBody = Body(..., description="저장할 list_id 또는 url")
+    body: SaveRequestBody = Body(..., description="저장할 list_id 또는 url"),
 ):
     if not body.list_id and not body.url:
-        raise HTTPException(status_code=400, detail="list_id나 url 중 하나는 필수입니다.")
+        raise HTTPException(
+            status_code=400, detail="list_id나 url 중 하나는 필수입니다."
+        )
 
     saved = SavedRequest(
-        list_id=body.list_id,
-        url=body.url,
-        created_at=datetime.now()
+        list_id=body.list_id, url=body.url, created_at=datetime.now()
     )
     await saved.insert()
     return {"message": "저장완료", "id": str(saved.id)}

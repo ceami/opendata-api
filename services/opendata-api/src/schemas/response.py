@@ -1,8 +1,20 @@
-from typing import Generic, TypeVar, List, Dict, Any, Optional, Literal
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.from typing import Generic, TypeVar, List, Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field, ConfigDict, AliasGenerator
 from pydantic.alias_generators import to_camel
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class BaseModelWithConfig(BaseModel):
@@ -159,10 +171,7 @@ class SaveRequestBody(BaseModel):
 
 
 def create_paginated_response(
-    items: List[Dict[str, Any]],
-    total: int,
-    page: int,
-    size: int
+    items: List[Dict[str, Any]], total: int, page: int, size: int
 ) -> Dict[str, Any]:
     total_pages = (total + size - 1) // size
     has_next = page < total_pages
@@ -175,7 +184,7 @@ def create_paginated_response(
         "size": size,
         "total_pages": total_pages,
         "has_next": has_next,
-        "has_prev": has_prev
+        "has_prev": has_prev,
     }
 
     return PaginatedResponse(**response_data).model_dump(by_alias=True)
@@ -207,5 +216,5 @@ def convert_generated_document_to_camel_case(
         "tokenCount": doc.get("token_count"),
         "dataType": data_type,
         "resultJson": doc.get("result_json"),
-        "detail": doc.get("detail")
+        "detail": doc.get("detail"),
     }

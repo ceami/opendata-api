@@ -1,4 +1,16 @@
-from typing import List, Dict, Any, Optional
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.from typing import List, Dict, Any, Optional
 
 from elasticsearch import Elasticsearch
 
@@ -15,7 +27,7 @@ class SearchService:
         from_: int = 0,
         data_type: Optional[str] = None,
         exact_match: bool = False,
-        min_score: Optional[float] = None
+        min_score: Optional[float] = None,
     ) -> Dict[str, Any]:
         """제목 기반 검색"""
         query = query.strip()
@@ -30,7 +42,7 @@ class SearchService:
             "query": search_query,
             "highlight": self._get_highlight_config(),
             "size": size,
-            "from": from_
+            "from": from_,
         }
 
         if min_score is not None:
@@ -49,30 +61,17 @@ class SearchService:
                 "should": [
                     {
                         "match_phrase": {
-                            "list_title": {
-                                "query": query,
-                                "boost": 3.0
-                            }
+                            "list_title": {"query": query, "boost": 3.0}
                         }
                     },
+                    {"match_phrase": {"title": {"query": query, "boost": 2.0}}},
                     {
                         "match_phrase": {
-                            "title": {
-                                "query": query,
-                                "boost": 2.0
-                            }
+                            "org_nm": {"query": query, "boost": 1.5}
                         }
                     },
-                    {
-                        "match_phrase": {
-                            "org_nm": {
-                                "query": query,
-                                "boost": 1.5
-                            }
-                        }
-                    }
                 ],
-                "minimum_should_match": 1
+                "minimum_should_match": 1,
             }
         }
 
@@ -92,44 +91,35 @@ class SearchService:
                                 "org_nm^1.5",
                                 "category_nm^1.5",
                                 "dept_nm^1.5",
-                                "desc^0.8"
+                                "desc^0.8",
                             ],
                             "type": "best_fields",
                             "fuzziness": "1",
                             "operator": "and",
-                            "minimum_should_match": "75%"
+                            "minimum_should_match": "75%",
                         }
                     },
                     {
                         "multi_match": {
                             "query": query,
-                            "fields": [
-                                "list_title^4",
-                                "title^3",
-                                "org_nm^2"
-                            ],
+                            "fields": ["list_title^4", "title^3", "org_nm^2"],
                             "type": "phrase",
-                            "boost": 2.0
+                            "boost": 2.0,
                         }
-                    }
+                    },
                 ],
-                "minimum_should_match": 1
+                "minimum_should_match": 1,
             }
         }
 
     def _add_data_type_filter(
-        self, 
-        base_query: Dict[str, Any], 
-        data_type: Optional[str]
+        self, base_query: Dict[str, Any], data_type: Optional[str]
     ) -> Dict[str, Any]:
         """데이터 타입 필터를 추가"""
         if data_type:
             return {
                 "bool": {
-                    "must": [
-                        base_query,
-                        {"term": {"data_type": data_type}}
-                    ]
+                    "must": [base_query, {"term": {"data_type": data_type}}]
                 }
             }
         return base_query
@@ -142,7 +132,7 @@ class SearchService:
                 "title": {},
                 "title.korean": {},
                 "keywords": {},
-                "org_nm": {}
+                "org_nm": {},
             }
         }
 
@@ -151,7 +141,7 @@ class SearchService:
         queries: List[str],
         weights: Optional[List[float]] = None,
         size: int = 10,
-        from_: int = 0
+        from_: int = 0,
     ) -> Dict[str, Any]:
         """가중치를 적용한 다중 쿼리 검색"""
         if not queries:
@@ -167,19 +157,11 @@ class SearchService:
 
         search_body = {
             "query": {
-                "bool": {
-                    "should": should_clauses,
-                    "minimum_should_match": 1
-                }
+                "bool": {"should": should_clauses, "minimum_should_match": 1}
             },
-            "highlight": {
-                "fields": {
-                    "list_title": {},
-                    "title": {}
-                }
-            },
+            "highlight": {"fields": {"list_title": {}, "title": {}}},
             "size": size,
-            "from": from_
+            "from": from_,
         }
 
         try:
@@ -188,7 +170,9 @@ class SearchService:
         except Exception:
             raise
 
-    def _build_weighted_query(self, query: str, weight: float) -> Dict[str, Any]:
+    def _build_weighted_query(
+        self, query: str, weight: float
+    ) -> Dict[str, Any]:
         """가중치가 적용된 쿼리를 구성"""
         return {
             "multi_match": {
@@ -201,12 +185,12 @@ class SearchService:
                     "org_nm^1.5",
                     "category_nm^1.5",
                     "dept_nm^1.5",
-                    "desc^0.8"
+                    "desc^0.8",
                 ],
                 "type": "best_fields",
                 "fuzziness": "AUTO",
                 "operator": "or",
-                "boost": weight
+                "boost": weight,
             }
         }
 
@@ -216,7 +200,7 @@ class SearchService:
         secondary_queries: Optional[List[str]] = None,
         excluded_queries: Optional[List[str]] = None,
         size: int = 10,
-        from_: int = 0
+        from_: int = 0,
     ) -> Dict[str, Any]:
         """고급 검색"""
         bool_query = {}
@@ -238,17 +222,10 @@ class SearchService:
             ]
 
         search_body = {
-            "query": {
-                "bool": bool_query
-            },
-            "highlight": {
-                "fields": {
-                    "list_title": {},
-                    "title": {}
-                }
-            },
+            "query": {"bool": bool_query},
+            "highlight": {"fields": {"list_title": {}, "title": {}}},
             "size": size,
-            "from": from_
+            "from": from_,
         }
 
         try:
@@ -270,11 +247,11 @@ class SearchService:
                     "org_nm^1.5",
                     "category_nm^1.5",
                     "dept_nm^1.5",
-                    "desc^0.8"
+                    "desc^0.8",
                 ],
                 "type": "best_fields",
                 "fuzziness": "AUTO",
-                "operator": "or"
+                "operator": "or",
             }
         }
 
@@ -291,9 +268,9 @@ class SearchService:
                     "org_nm",
                     "category_nm",
                     "dept_nm",
-                    "desc"
+                    "desc",
                 ],
-                "type": "best_fields"
+                "type": "best_fields",
             }
         }
 
@@ -303,14 +280,11 @@ class SearchService:
         size: int = 10,
         from_: int = 0,
         data_type: Optional[str] = None,
-        max_results_threshold: int = 1000
+        max_results_threshold: int = 1000,
     ) -> Dict[str, Any]:
         """검색 결과가 너무 많을 때 자동으로 더 엄격한 필터링을 적용"""
         initial_search = self.search_titles(
-            query=query,
-            size=1,
-            from_=0,
-            data_type=data_type
+            query=query, size=1, from_=0, data_type=data_type
         )
 
         total_results = initial_search["total"]["value"]
@@ -322,30 +296,25 @@ class SearchService:
                 from_=from_,
                 data_type=data_type,
                 exact_match=True,
-                min_score=10.0
+                min_score=10.0,
             )
         else:
             return self.search_titles(
-                query=query,
-                size=size,
-                from_=from_,
-                data_type=data_type
+                query=query, size=size, from_=from_, data_type=data_type
             )
 
     def get_all_titles(self, size: int = 1000) -> List[Dict[str, Any]]:
         """모든 제목을 조회"""
         search_body = {
-            "query": {
-                "match_all": {}
-            },
+            "query": {"match_all": {}},
             "size": size,
             "_source": [
                 "list_id",
                 "list_title",
                 "title",
                 "category_nm",
-                "dept_nm"
-            ]
+                "dept_nm",
+            ],
         }
 
         try:

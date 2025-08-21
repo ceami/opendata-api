@@ -1,4 +1,16 @@
-from typing import Any, Dict, Optional
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.from typing import Any, Dict, Optional
 import asyncio
 import logging
 from functools import lru_cache
@@ -51,10 +63,7 @@ class ServiceContainer:
 
         try:
             settings = self.get_settings()
-            await MongoDB.init(
-                settings.MONGO_URL,
-                settings.MONGO_DB
-            )
+            await MongoDB.init(settings.MONGO_URL, settings.MONGO_DB)
 
             es_client = Elasticsearch([settings.ELASTICSEARCH_URL])
             self._services["elasticsearch"] = es_client
@@ -71,8 +80,8 @@ class ServiceContainer:
                     GeneratedAPIDocs,
                     GeneratedFileDocs,
                     OpenFileInfo,
-                    SavedRequest
-                ]
+                    SavedRequest,
+                ],
             )
 
             self._initialized = True
@@ -177,7 +186,7 @@ def get_settings_dependency() -> Settings:
 
 
 def get_service_container_with_settings(
-    settings: Settings = Depends(get_settings_dependency)
+    settings: Settings = Depends(get_settings_dependency),
 ) -> ServiceContainer:
     service_container.set_settings(settings)
     return service_container
@@ -206,7 +215,7 @@ def get_search_service():
     if not es_client:
         raise HTTPException(
             status_code=500,
-            detail="Elasticsearch 클라이언트를 사용할 수 없습니다."
+            detail="Elasticsearch 클라이언트를 사용할 수 없습니다.",
         )
 
     return SearchService(es_client)

@@ -1,4 +1,16 @@
-import asyncio
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.import asyncio
 import logging
 from typing import List, Dict, Any
 from elasticsearch import Elasticsearch
@@ -12,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 class TitleIndexer:
     def __init__(
-        self, mongo_uri: str = None,
+        self,
+        mongo_uri: str = None,
         es_hosts: List[str] = None,
     ):
         settings = get_settings()
@@ -32,7 +45,7 @@ class TitleIndexer:
         mongo_client = AsyncIOMotorClient(self.mongo_uri)
         await init_beanie(
             database=mongo_client.open_data,
-            document_models=[OpenAPIInfo, OpenFileInfo]
+            document_models=[OpenAPIInfo, OpenFileInfo],
         )
         return mongo_client
 
@@ -61,59 +74,41 @@ class TitleIndexer:
                         "analyzer": "nori_analyzer",
                         "search_analyzer": "nori_analyzer",
                         "fields": {
-                            "keyword": {
-                                "type": "keyword",
-                                "ignore_above": 256
-                            },
+                            "keyword": {"type": "keyword", "ignore_above": 256},
                             "ngram": {
                                 "type": "text",
-                                "analyzer": "ngram_analyzer"
-                            }
-                        }
+                                "analyzer": "ngram_analyzer",
+                            },
+                        },
                     },
-                    "list_id": {
-                        "type": "integer"
-                    },
+                    "list_id": {"type": "integer"},
                     "title": {
                         "type": "text",
                         "analyzer": "english_analyzer",
                         "search_analyzer": "english_analyzer",
                         "fields": {
-                            "keyword": {
-                                "type": "keyword",
-                                "ignore_above": 256
-                            },
+                            "keyword": {"type": "keyword", "ignore_above": 256},
                             "korean": {
                                 "type": "text",
-                                "analyzer": "nori_analyzer"
-                            }
-                        }
+                                "analyzer": "nori_analyzer",
+                            },
+                        },
                     },
-                    "category_nm": {
-                        "type": "keyword"
-                    },
-                    "dept_nm": {
-                        "type": "keyword"
-                    },
+                    "category_nm": {"type": "keyword"},
+                    "dept_nm": {"type": "keyword"},
                     "org_nm": {
                         "type": "text",
                         "analyzer": "nori_analyzer",
-                        "search_analyzer": "nori_analyzer"
+                        "search_analyzer": "nori_analyzer",
                     },
-                    "keywords": {
-                        "type": "keyword"
-                    },
+                    "keywords": {"type": "keyword"},
                     "desc": {
                         "type": "text",
                         "analyzer": "nori_analyzer",
-                        "search_analyzer": "nori_analyzer"
+                        "search_analyzer": "nori_analyzer",
                     },
-                    "data_format": {
-                        "type": "keyword"
-                    },
-                    "api_type": {
-                        "type": "keyword"
-                    }
+                    "data_format": {"type": "keyword"},
+                    "api_type": {"type": "keyword"},
                 }
             },
             "settings": {
@@ -122,7 +117,7 @@ class TitleIndexer:
                         "nori_analyzer": {
                             "type": "nori",
                             "tokenizer": "nori_tokenizer",
-                            "filter": ["nori_readingform", "lowercase", "trim"]
+                            "filter": ["nori_readingform", "lowercase", "trim"],
                         },
                         "english_analyzer": {
                             "type": "custom",
@@ -131,35 +126,33 @@ class TitleIndexer:
                                 "lowercase",
                                 "english_stop",
                                 "english_stemmer",
-                                "trim"
-                            ]
+                                "trim",
+                            ],
                         },
                         "ngram_analyzer": {
                             "type": "custom",
                             "tokenizer": "standard",
-                            "filter": ["lowercase", "ngram_filter"]
-                        }
+                            "filter": ["lowercase", "ngram_filter"],
+                        },
                     },
                     "filter": {
                         "ngram_filter": {
                             "type": "ngram",
                             "min_gram": 2,
-                            "max_gram": 3
+                            "max_gram": 3,
                         },
                         "english_stop": {
                             "type": "stop",
-                            "stopwords": "_english_"
+                            "stopwords": "_english_",
                         },
                         "english_stemmer": {
                             "type": "stemmer",
-                            "language": "english"
-                        }
-                    }
+                            "language": "english",
+                        },
+                    },
                 },
-                "index": {
-                    "max_ngram_diff": 50
-                }
-            }
+                "index": {"max_ngram_diff": 50},
+            },
         }
 
         try:
@@ -187,7 +180,7 @@ class TitleIndexer:
                         "desc": doc.get("desc", ""),
                         "data_format": doc.get("data_format", ""),
                         "api_type": doc.get("api_type", ""),
-                        "data_type": "API"
+                        "data_type": "API",
                     }
                     api_count += 1
                 else:
@@ -202,18 +195,18 @@ class TitleIndexer:
                         "desc": doc.get("desc", ""),
                         "data_format": doc.get("data_type", ""),
                         "api_type": "FILE",
-                        "data_type": "FILE"
+                        "data_type": "FILE",
                     }
                     file_count += 1
 
                 self.es.index(
-                    index=self.index_name,
-                    id=doc.get("list_id"),
-                    body=es_doc
+                    index=self.index_name, id=doc.get("list_id"), body=es_doc
                 )
 
             self.es.indices.refresh(index=self.index_name)
-            logger.info(f"인덱싱 완료! API: {api_count}개, File: {file_count}개, 총 {len(documents)}개")
+            logger.info(
+                f"인덱싱 완료! API: {api_count}개, File: {file_count}개, 총 {len(documents)}개"
+            )
         except Exception as e:
             logger.error(f"문서 인덱싱 중 오류 발생: {e}")
             raise
@@ -239,8 +232,12 @@ class TitleIndexer:
             self.index_documents(all_documents)
 
             stats = self.es.indices.stats(index=self.index_name)
-            total_docs = stats["indices"][self.index_name]["total"]["docs"]["count"]
-            logger.info(f"인덱싱 완료! 총 {total_docs}개의 문서가 인덱싱되었습니다.")
+            total_docs = stats["indices"][self.index_name]["total"]["docs"][
+                "count"
+            ]
+            logger.info(
+                f"인덱싱 완료! 총 {total_docs}개의 문서가 인덱싱되었습니다."
+            )
 
         except Exception as e:
             logger.error(f"인덱싱 프로세스 중 오류 발생: {e}")

@@ -1,4 +1,16 @@
-import logging
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.import logging
 import json
 import threading
 import time
@@ -50,7 +62,7 @@ class StreamingFileHandler(logging.Handler):
         if self.file_handler:
             self.file_handler.close()
 
-        self.file_handler = open(self.current_file, 'a', encoding='utf-8')
+        self.file_handler = open(self.current_file, "a", encoding="utf-8")
 
     def _rotate_file(self):
         if not self.current_file.exists():
@@ -90,7 +102,7 @@ class StreamingFileHandler(logging.Handler):
         try:
             for log_entry in logs_to_write:
                 if self.file_handler:
-                    self.file_handler.write(log_entry + '\n')
+                    self.file_handler.write(log_entry + "\n")
                     self.file_handler.flush()
 
             self._rotate_file()
@@ -101,9 +113,7 @@ class StreamingFileHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         try:
             structured_log = {
-                "timestamp": datetime.fromtimestamp(
-                    record.created
-                ).isoformat(),
+                "timestamp": datetime.fromtimestamp(record.created).isoformat(),
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
@@ -149,9 +159,9 @@ def setup_logger(
     loguru_logger.add(
         sys.stdout,
         format="<green>{time:HH:mm:ss}</green> | "
-               "<level>{level: <8}</level> | "
-               "<cyan>{file}:{line}:{function}</cyan> | "
-               "<level>{message}</level>",
+        "<level>{level: <8}</level> | "
+        "<cyan>{file}:{line}:{function}</cyan> | "
+        "<level>{message}</level>",
         level=log_level.upper(),
         colorize=True,
         backtrace=True,
@@ -173,7 +183,7 @@ def setup_logger(
         loguru_logger.add(
             str(log_file),
             format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | "
-                   "{file}:{line}:{function} | {message}",
+            "{file}:{line}:{function} | {message}",
             level=log_level.upper(),
             rotation="10 MB",
             retention="30 days",
@@ -194,22 +204,14 @@ def setup_logger(
                 frame = frame.f_back
                 depth += 1
 
-            loguru_logger.opt(
-                depth=depth, exception=record.exc_info
-            ).log(
+            loguru_logger.opt(depth=depth, exception=record.exc_info).log(
                 level, record.getMessage()
             )
 
-    logging.basicConfig(
-        handlers=[InterceptHandler()],
-        level=0,
-        force=True
-    )
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
     logger = logging.getLogger(name)
-    logger.setLevel(
-        getattr(logging, log_level.upper(), logging.INFO)
-    )
+    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
 
     return logger
 
