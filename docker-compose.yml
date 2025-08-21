@@ -1,66 +1,72 @@
 services:
-  odm-mongo:
-    container_name: "odm-mongo"
-    image: mongo:8.0.12
-    ports:
-      - 27017:27017
-    volumes:
-      - odm-data:/data/db
-    env_file:
-      - ./services/odm/.env
-    networks:
-      - odm-network
-
-  core-server:
+  opendata-api:
     build:
-      context: ./services/odm/
+      context: ./services/opendata-api/
       dockerfile: Dockerfile
-    container_name: "odm-core-server"
+    container_name: opendata-api
     command:  >
       sh -c "uv run gunicorn -c /opt/program/core/gunicorn_config.py main:app --timeout 60"
+    restart: unless-stopped
     cpus: 1.0
-    mem_limit: "2g"
+    mem_limit: "8g"
     mem_reservation: "1g"
-    ports:
-      - "7500:8000"
+    expose:
+      - 8000
+    environment:
+      - ENV=${ENV:-local}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 60s
     env_file:
-      - ./services/odm/.env
+      - .env.${ENV}
     networks:
-      - odm-network
+      - opendata-network
 
   elasticsearch:
     build:
       context: ./services/elasticsearch
       dockerfile: Dockerfile
-    container_name: "odm-elasticsearch"
+    container_name: opendata-es
+    restart: unless-stopped
     cpus: 1.0
-    mem_limit: "2g"
+    mem_limit: "8g"
     mem_reservation: "1g"
-    ports:
-      - "7501:9200"
+    expose:
+      - 9200
     volumes:
       - es-data:/usr/share/elasticsearch/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9200"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
+      start_period: 60s
     env_file:
-      - ./services/odm/.env
+      - .env.${ENV}
     networks:
-      - odm-network
+      - opendata-network
+
+  opendata-mongo:
+    container_name: opendata-mongo
+    image: mongo:8.0.12
+    expose:
+      - 27017
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - opendata-network
+    env_file:
+      - .env.${ENV}
+    restart: always
 
 volumes:
   es-data:
-  odm-data:
+  mongo-data:
 
 networks:
-  odm-network:
-    name: odm-network
+  opendata-network:
+    name: opendata-network
     driver: bridge
