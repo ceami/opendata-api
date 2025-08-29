@@ -10,15 +10,17 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.from typing import Dict
+# limitations under the License.
+from typing import Dict
 
 import uvicorn
-from api import document_router, search_router
-from core.dependencies import get_health_status, lifespan
-from core.settings import get_settings
 from fastapi import Depends, FastAPI
 from fastapi.security import HTTPBasic
 from starlette.middleware.cors import CORSMiddleware
+
+from api import document_router, search_router
+from core.dependencies import get_health_status, lifespan
+from core.settings import get_settings
 from utils.logger import setup_logger
 
 settings = get_settings()

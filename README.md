@@ -26,6 +26,15 @@ cd open-data-mcp-api
 
 ### 2. 환경변수 설정
 
+```bash
+# .env 파일 생성 (env.sample을 복사)
+cp .env.sample .env
+
+# .env 파일을 편집하여 실제 값으로 설정
+# 특히 ODP_SERVICE_KEY는 공공데이터포털에서 발급받은 키로 설정
+```
+
+**주요 환경변수**:
 - `ODP_SERVICE_KEY`: 공공데이터포털 서비스 키
   - 파라미터 이름에 `serviceKey`가 포함되어 있으면 자동 주입
   - 헤더 이름에 `Authorization`이 포함되어 있으면 `Infuser {키}` 형식으로 자동 주입

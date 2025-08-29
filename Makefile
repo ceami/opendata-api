@@ -10,7 +10,8 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.environment := $(if $(ENV),$(ENV),local)
+# limitations under the License.
+environment := $(if $(ENV),$(ENV),local)
 
 COMPOSE_FILE := docker-compose.yml
 COMPOSE_OVERRIDE := docker-compose.override.yml

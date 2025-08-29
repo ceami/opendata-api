@@ -10,13 +10,15 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.import asyncio
+# limitations under the License.
+import asyncio
 import logging
-from typing import List, Dict, Any
-from elasticsearch import Elasticsearch
-from models import OpenAPIInfo, OpenFileInfo
-from core.settings import get_settings
+from typing import Any, Dict, List
 
+from elasticsearch import Elasticsearch
+
+from core.settings import get_settings
+from models import OpenAPIInfo, OpenFileInfo
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,8 +41,8 @@ class TitleIndexer:
         self.index_name = settings.ELASTICSEARCH_INDEX_NAME
 
     async def initialize_beanie(self):
-        from motor.motor_asyncio import AsyncIOMotorClient
         from beanie import init_beanie
+        from motor.motor_asyncio import AsyncIOMotorClient
 
         mongo_client = AsyncIOMotorClient(self.mongo_uri)
         await init_beanie(

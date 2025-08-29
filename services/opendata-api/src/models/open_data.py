@@ -10,10 +10,12 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.from beanie import Document
+# limitations under the License.
 from datetime import datetime
-from typing import Literal, Dict, Any
+from typing import Any, Dict, Literal
+
 import pymongo
+from beanie import Document
 
 from schemas import ParsedEndpoint
 

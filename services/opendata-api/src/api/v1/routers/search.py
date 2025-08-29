@@ -10,13 +10,14 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.from beanie.operators import In
-from fastapi import APIRouter, Query, status, HTTPException, Depends
+# limitations under the License.
 from typing import List
 
-from core.exceptions import create_openapi_http_exception_doc
+from beanie.operators import In
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
 from core.dependencies import get_search_service
-from service.search import SearchService
+from core.exceptions import create_openapi_http_exception_doc
 from models import (
     GeneratedAPIDocs,
     GeneratedFileDocs,
@@ -28,6 +29,7 @@ from schemas.response import (
     SearchWithDocsDetailItem,
     SearchWithDocsDetailResponse,
 )
+from service.search import SearchService
 
 search_router = APIRouter(prefix="/search", tags=["search"])
 

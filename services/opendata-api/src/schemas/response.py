@@ -10,8 +10,10 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.from typing import Generic, TypeVar, List, Dict, Any, Optional, Literal
-from pydantic import BaseModel, Field, ConfigDict, AliasGenerator
+# limitations under the License.
+from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
+
+from pydantic import AliasGenerator, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 T = TypeVar("T")

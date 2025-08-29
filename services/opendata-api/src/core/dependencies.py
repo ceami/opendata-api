@@ -10,26 +10,18 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.from typing import Any, Dict, Optional
+# limitations under the License.
 import asyncio
 import logging
-from functools import lru_cache
-
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException
+from functools import lru_cache
+from typing import Any, Dict, Optional
+
 from elasticsearch import Elasticsearch
-from motor.motor_asyncio import AsyncIOMotorClient
-from beanie import init_beanie
-from models.open_data import (
-    OpenAPIInfo,
-    ParsedAPIInfo,
-    ParsedFileInfo,
-    GeneratedAPIDocs,
-    GeneratedFileDocs,
-    OpenFileInfo,
-    SavedRequest,
-)
+from fastapi import Depends, FastAPI, HTTPException
+
 from db import MongoDB
+
 from .settings import Settings, get_settings
 
 
@@ -64,25 +56,10 @@ class ServiceContainer:
         try:
             settings = self.get_settings()
             await MongoDB.init(settings.MONGO_URL, settings.MONGO_DB)
+            self._services["mongo_client"] = MongoDB.get_client()
 
             es_client = Elasticsearch([settings.ELASTICSEARCH_URL])
             self._services["elasticsearch"] = es_client
-
-            mongo_client = AsyncIOMotorClient(settings.MONGO_URL)
-            self._services["mongo_client"] = mongo_client
-
-            await init_beanie(
-                database=mongo_client.open_data,
-                document_models=[
-                    OpenAPIInfo,
-                    ParsedAPIInfo,
-                    ParsedFileInfo,
-                    GeneratedAPIDocs,
-                    GeneratedFileDocs,
-                    OpenFileInfo,
-                    SavedRequest,
-                ],
-            )
 
             self._initialized = True
             logger.info("서비스 컨테이너 초기화 완료")
@@ -196,7 +173,7 @@ def get_elasticsearch_client() -> Elasticsearch:
     return service_container._services.get("elasticsearch")
 
 
-def get_mongo_client() -> AsyncIOMotorClient:
+def get_mongo_client():
     return service_container._services.get("mongo_client")
 
 

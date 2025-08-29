@@ -11,14 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from beanie.operators import Eq, In
-from fastapi import APIRouter, Query, Path, status, HTTPException, Depends
-from typing import Dict, Any, List
-from datetime import datetime
 import logging
+from datetime import datetime
+from typing import Any, Dict, List
 
-from fastapi import Body
+from beanie.operators import Eq, In
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
 
+from core.dependencies import (
+    get_cross_collection_service,
+    get_logger_service,
+    get_search_service,
+)
+from core.exceptions import create_openapi_http_exception_doc
 from models import (
     GeneratedAPIDocs,
     GeneratedFileDocs,
@@ -26,24 +31,18 @@ from models import (
     OpenFileInfo,
     SavedRequest,
 )
-from core.exceptions import create_openapi_http_exception_doc
-from core.dependencies import (
-    get_cross_collection_service,
-    get_search_service,
-    get_logger_service,
+from schemas.response import (
+    DocumentWithParsedInfo,
+    GeneratedDocumentResponse,
+    PaginatedResponse,
+    SaveRequestBody,
+    SearchWithDocsItem,
+    SuccessRateResponse,
+    convert_generated_document_to_camel_case,
+    create_paginated_response,
 )
 from service.cross_collection import CrossCollectionService
 from service.search import SearchService
-from schemas.response import (
-    create_paginated_response,
-    PaginatedResponse,
-    SearchWithDocsItem,
-    DocumentWithParsedInfo,
-    SuccessRateResponse,
-    convert_generated_document_to_camel_case,
-    GeneratedDocumentResponse,
-    SaveRequestBody,
-)
 
 
 def format_datetime(dt: datetime | None) -> str | None:
