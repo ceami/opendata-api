@@ -14,7 +14,13 @@
 from beanie import init_beanie
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
-from models import GeneratedFileDocs, OpenAPIInfo, OpenFileInfo
+from models import (
+    GeneratedAPIDocs,
+    GeneratedFileDocs,
+    OpenAPIInfo,
+    OpenFileInfo,
+    SavedRequest,
+)
 
 
 class MongoDB:
@@ -27,7 +33,13 @@ class MongoDB:
         cls._database = AsyncIOMotorDatabase(cls._client, database_name)
         await init_beanie(
             database=cls._database,
-            document_models=[OpenAPIInfo, OpenFileInfo, GeneratedFileDocs],
+            document_models=[
+                OpenAPIInfo,
+                OpenFileInfo,
+                GeneratedFileDocs,
+                GeneratedAPIDocs,
+                SavedRequest,
+            ],
         )
 
     @classmethod
