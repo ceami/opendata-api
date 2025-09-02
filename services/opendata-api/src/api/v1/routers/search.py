@@ -14,9 +14,9 @@
 from typing import List
 
 from beanie.operators import In
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from core.dependencies import get_search_service
+from core.dependencies import get_search_service, limiter
 from core.exceptions import create_openapi_http_exception_doc
 from models import (
     GeneratedAPIDocs,
@@ -41,12 +41,15 @@ search_router = APIRouter(prefix="/search", tags=["search"])
         [
             status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND,
+            status.HTTP_429_TOO_MANY_REQUESTS,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         ]
     ),
     description="제목으로 공공데이터 검색 (생성된 문서가 있는 API/File, 엔드포인트 설명 포함)",
 )
+@limiter.limit("60/minute")
 async def search_titles(
+    request: Request,
     query: List[str] = Query(..., description="검색할 키워드"),
     page: int = Query(1, ge=1, description="페이지 번호"),
     page_size: int = Query(10, ge=1, le=100, description="페이지 크기"),
@@ -205,12 +208,15 @@ async def search_titles(
         [
             status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND,
+            status.HTTP_429_TOO_MANY_REQUESTS,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         ]
     ),
     description="제목으로 공공 데이터 검색 (생성된 문서가 있는 API/File 필터링, 엔드포인트 설명 포함)",
 )
+@limiter.limit("60/minute")
 async def search_titles_with_docs(
+    request: Request,
     q: str = Query(..., description="검색할 키워드"),
     page: int = Query(1, ge=1, description="페이지 번호"),
     page_size: int = Query(10, ge=1, le=100, description="페이지 크기"),

@@ -19,10 +19,18 @@ from typing import Any, Dict, Optional
 
 from elasticsearch import Elasticsearch
 from fastapi import Depends, FastAPI, HTTPException
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
 
 from db import MongoDB
 
 from .settings import Settings, get_settings
+
+limiter = Limiter(key_func=get_remote_address)
+
+
+def get_rate_limit_exceeded_handler():
+    return _rate_limit_exceeded_handler
 
 
 class ServiceContainer:

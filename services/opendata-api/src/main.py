@@ -16,10 +16,16 @@ from typing import Dict
 import uvicorn
 from fastapi import Depends, FastAPI
 from fastapi.security import HTTPBasic
+from slowapi.errors import RateLimitExceeded
 from starlette.middleware.cors import CORSMiddleware
 
 from api import document_router, search_router
-from core.dependencies import get_health_status, lifespan
+from core.dependencies import (
+    get_health_status,
+    get_rate_limit_exceeded_handler,
+    lifespan,
+    limiter,
+)
 from core.settings import get_settings
 from utils.logger import setup_logger
 
@@ -42,6 +48,9 @@ app = FastAPI(
     debug=settings.debug,
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, get_rate_limit_exceeded_handler())
 
 app.add_middleware(
     CORSMiddleware,
