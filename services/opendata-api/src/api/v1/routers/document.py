@@ -16,12 +16,22 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from beanie.operators import Eq, In
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    status,
+)
 
 from core.dependencies import (
     get_cross_collection_service,
     get_logger_service,
     get_search_service,
+    limiter,
 )
 from core.exceptions import create_openapi_http_exception_doc
 from models import (
@@ -61,12 +71,15 @@ document_router = APIRouter(prefix="/document", tags=["document"])
         [
             status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND,
+            status.HTTP_429_TOO_MANY_REQUESTS,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         ]
     ),
     description="Frontend용 통합 API - 검색 / 데이터 제공 (API + File)",
 )
+@limiter.limit("60/minute")
 async def get_frontend_data(
+    request: Request,
     q: str = Query(None, description="검색 키워드"),
     page: int = Query(1, ge=1, description="페이지 번호"),
     size: int = Query(20, ge=1, le=100, description="페이지 크기"),
@@ -368,12 +381,15 @@ async def get_frontend_data(
         [
             status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND,
+            status.HTTP_429_TOO_MANY_REQUESTS,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         ]
     ),
     description="생성된 API/File 문서 목록 조회",
 )
+@limiter.limit("60/minute")
 async def get_generated_documents(
+    request: Request,
     list_ids: List[int] = Query(
         None, description="조회할 list_id 목록 (미입력시 전체 조회)"
     ),
@@ -444,12 +460,14 @@ async def get_generated_documents(
         [
             status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND,
+            status.HTTP_429_TOO_MANY_REQUESTS,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         ]
     ),
     description="성공률 조회",
 )
-async def get_success_rate():
+@limiter.limit("60/minute")
+async def get_success_rate(request: Request):
     try:
         total_open_data = await OpenAPIInfo.count()
         total_std_docs = await GeneratedAPIDocs.count()
@@ -476,12 +494,15 @@ async def get_success_rate():
         [
             status.HTTP_400_BAD_REQUEST,
             status.HTTP_404_NOT_FOUND,
+            status.HTTP_429_TOO_MANY_REQUESTS,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         ]
     ),
     description="API 표준 문서 상세 조회 (API + File)",
 )
+@limiter.limit("60/minute")
 async def get_api_std_document(
+    request: Request,
     list_id: int = Path(..., ge=1),
 ):
     api_document = await GeneratedAPIDocs.find_one(
@@ -614,7 +635,9 @@ async def get_api_std_document(
 @document_router.post(
     path="/save-request", response_model=dict, description="list_id나 url 저장"
 )
+@limiter.limit("60/minute")
 async def save_request(
+    request: Request,
     body: SaveRequestBody = Body(..., description="저장할 list_id 또는 url"),
 ):
     if not body.list_id and not body.url:

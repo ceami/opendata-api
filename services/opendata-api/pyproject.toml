@@ -23,6 +23,7 @@ dependencies = [
     "motor>=3.7.1",
     "pydantic-settings>=2.10.1",
     "pymongo>=4.13.2",
+    "slowapi>=0.1.9",
     "uvicorn>=0.35.0",
 ]
 
