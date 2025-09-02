@@ -7,7 +7,7 @@ services:
     command:  >
       sh -c "uv run gunicorn -c /opt/program/core/gunicorn_config.py main:app --timeout 60"
     restart: unless-stopped
-    cpus: 1.0
+    cpus: 2.0
     mem_limit: "8g"
     mem_reservation: "1g"
     expose:
