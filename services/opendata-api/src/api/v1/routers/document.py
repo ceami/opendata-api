@@ -115,9 +115,16 @@ async def get_frontend_data(
     ),
 ):
     try:
-        logger.info(
-            f"[Document] get_frontend_data_v2 호출: q={q}, page={page}, size={size}, sort_by={sort_by}"
-        )
+        if q and q.strip():
+            logger.info(
+                f"[Document] 검색 요청: 검색어='{q.strip()}', "
+                f"페이지={page}, 크기={size}, 정렬={sort_by}"
+            )
+        else:
+            logger.debug(
+                f"[Document] 전체 데이터 요청: 페이지={page}, 크기={size}, "
+                f"정렬={sort_by}"
+            )
         if q and q.strip():
             from_ = (page - 1) * size
 
@@ -359,9 +366,16 @@ async def get_frontend_data(
                 )
                 formatted_items.append(formatted_item.model_dump(by_alias=True))
 
-            logger.info(
-                f"[Document] get_frontend_data_v2 완료: 검색 결과 {len(formatted_items)}개"
-            )
+            if q and q.strip():
+                logger.debug(
+                    f"[Document] 검색 완료: 검색어='{q.strip()}', "
+                    f"결과 {len(formatted_items)}개"
+                )
+            else:
+                logger.debug(
+                    f"[Document] 전체 데이터 조회 완료: "
+                    f"결과 {len(formatted_items)}개"
+                )
             return create_paginated_response(
                 items=formatted_items,
                 total=result["total"],
@@ -370,7 +384,7 @@ async def get_frontend_data(
             )
 
     except Exception as e:
-        logger.error(f"[Document] get_frontend_data_v2 에러: {str(e)}")
+        logger.exception(f"[Document] get_frontend_data_v2 에러: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -395,6 +409,9 @@ async def get_generated_documents(
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_router")
+    ),
 ):
     try:
         result = []
@@ -448,6 +465,7 @@ async def get_generated_documents(
             result.append(schema_obj.model_dump(by_alias=True))
 
     except Exception as e:
+        logger.exception(f"[Document] get_generated_documents 에러: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
     return result

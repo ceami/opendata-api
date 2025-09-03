@@ -115,7 +115,9 @@ class StreamingFileHandler(logging.Handler):
     def emit(self, record: logging.LogRecord):
         try:
             structured_log = {
-                "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+                "timestamp": datetime.fromtimestamp(record.created).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
@@ -160,7 +162,7 @@ def setup_logger(
 
     loguru_logger.add(
         sys.stdout,
-        format="<green>{time:HH:mm:ss}</green> | "
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
         "<level>{level: <8}</level> | "
         "<cyan>{file}:{line}:{function}</cyan> | "
         "<level>{message}</level>",

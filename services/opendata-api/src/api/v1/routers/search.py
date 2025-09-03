@@ -11,12 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import logging
 from typing import List
 
 from beanie.operators import In
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from core.dependencies import get_search_service, limiter
+from core.dependencies import get_logger_service, get_search_service, limiter
 from core.exceptions import create_openapi_http_exception_doc
 from models import (
     GeneratedAPIDocs,
@@ -54,8 +55,15 @@ async def search_titles(
     page: int = Query(1, ge=1, description="페이지 번호"),
     page_size: int = Query(10, ge=1, le=100, description="페이지 크기"),
     search_service: SearchService = Depends(get_search_service),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("search_router")
+    ),
 ):
     try:
+        logger.info(
+            f"[Search] 검색 요청: 검색어={query}, "
+            f"페이지={page}, 크기={page_size}"
+        )
         api_doc_list_ids = await GeneratedAPIDocs.find().to_list()
         file_doc_list_ids = await GeneratedFileDocs.find().to_list()
         api_list_ids = [doc.list_id for doc in api_doc_list_ids]
@@ -190,6 +198,10 @@ async def search_titles(
             )
             results.append(item)
 
+        logger.info(
+            f"[Search] 검색 완료: 검색어={query}, "
+            f"결과 {len(results)}개, 총 {len(filtered_hits)}개"
+        )
         return SearchWithDocsDetailResponse(
             total=len(filtered_hits),
             page=page,
@@ -198,6 +210,7 @@ async def search_titles(
         ).model_dump(by_alias=True)
 
     except Exception as e:
+        logger.exception(f"[Search] 검색 에러: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -221,8 +234,15 @@ async def search_titles_with_docs(
     page: int = Query(1, ge=1, description="페이지 번호"),
     page_size: int = Query(10, ge=1, le=100, description="페이지 크기"),
     search_service: SearchService = Depends(get_search_service),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("search_router")
+    ),
 ):
     try:
+        logger.info(
+            f"[Search] 검색 요청 (std-docs): 검색어='{q}', "
+            f"페이지={page}, 크기={page_size}"
+        )
         api_doc_list_ids = await GeneratedAPIDocs.find().to_list()
         file_doc_list_ids = await GeneratedFileDocs.find().to_list()
         api_list_ids = [doc.list_id for doc in api_doc_list_ids]
@@ -357,6 +377,10 @@ async def search_titles_with_docs(
             )
             results.append(item)
 
+        logger.info(
+            f"[Search] 검색 완료 (std-docs): 검색어='{q}', "
+            f"결과 {len(results)}개, 총 {len(filtered_hits)}개"
+        )
         return SearchWithDocsDetailResponse(
             total=len(filtered_hits),
             page=page,
@@ -365,6 +389,7 @@ async def search_titles_with_docs(
         ).model_dump(by_alias=True)
 
     except Exception as e:
+        logger.exception(f"[Search] 검색 에러: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
