@@ -11,7 +11,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .cross_collection import CrossCollectionService
-from .search import SearchService
+def validate_pagination_params(page: int, size: int) -> tuple[int, int]:
+    if page < 1:
+        page = 1
+    if size < 1:
+        size = 1
+    elif size > 100:
+        size = 100
+    return page, size
 
-__all__ = ["CrossCollectionService", "SearchService"]
+
+def calculate_offset(page: int, size: int) -> int:
+    return (page - 1) * size

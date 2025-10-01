@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Dict
+from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI
@@ -19,7 +19,15 @@ from fastapi.security import HTTPBasic
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.cors import CORSMiddleware
 
-from api import document_router, search_router
+from api import (
+    list_router,
+    docs_router,
+    stats_router,
+    admin_router,
+    search_titles_router,
+    search_titles_docs_router,
+    comments_router,
+)
 from core.dependencies import (
     get_health_status,
     get_rate_limit_exceeded_handler,
@@ -60,14 +68,19 @@ app.add_middleware(
     allow_headers=settings.cors_allow_headers,
 )
 
-app.include_router(document_router, prefix="/api/v1")
-app.include_router(search_router, prefix="/api/v1")
+app.include_router(list_router, prefix="/api/v1", tags=["document"])
+app.include_router(docs_router, prefix="/api/v1", tags=["document"])
+app.include_router(stats_router, prefix="/api/v1", tags=["document"])
+app.include_router(admin_router, prefix="/api/v1", tags=["document"])
+app.include_router(search_titles_router, prefix="/api/v1", tags=["search"])
+app.include_router(search_titles_docs_router, prefix="/api/v1", tags=["search"])
+app.include_router(comments_router, prefix="/api/v1", tags=["comments"])
 
 security = HTTPBasic()
 
 
 @app.get("/health")
-async def health_check() -> Dict:
+async def health_check() -> dict[str, Any]:
     return {
         "status": "ok",
         "service": "core-server",
@@ -78,8 +91,8 @@ async def health_check() -> Dict:
 
 @app.get("/health/services")
 async def services_health_check(
-    health_status: Dict = Depends(get_health_status),
-) -> Dict:
+    health_status: dict[str, Any] = Depends(get_health_status),
+) -> dict[str, Any]:
     is_initialized = health_status.get("initialized", False)
     status = "ok" if is_initialized else "initializing"
 
@@ -95,7 +108,6 @@ async def services_health_check(
 
 
 if __name__ == "__main__":
-    logger.info("애플리케이션 시작")
     uvicorn.run(
         app,
         host=settings.host,

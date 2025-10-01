@@ -13,7 +13,7 @@
 # limitations under the License.
 import os
 from functools import lru_cache
-from typing import List, Optional, Type
+from typing import Type
 
 from pydantic import Field
 from pydantic_settings import (
@@ -65,10 +65,10 @@ class Settings(BaseSettings):
     version: str = Field(default="0.0.1", alias="version")
     root_path: str = Field(default="", alias="root_path")
 
-    cors_origins: List[str] = Field(default_factory=list)
+    cors_origins: list[str] = Field(default_factory=list)
     cors_allow_credentials: bool = True
-    cors_allow_methods: List[str] = Field(default_factory=lambda: ["*"])
-    cors_allow_headers: List[str] = Field(default_factory=lambda: ["*"])
+    cors_allow_methods: list[str] = Field(default_factory=lambda: ["*"])
+    cors_allow_headers: list[str] = Field(default_factory=lambda: ["*"])
 
     enable_docs: bool = Field(default=True)
     enable_redoc: bool = Field(default=True)
@@ -116,7 +116,7 @@ class Settings(BaseSettings):
             self.enable_docs = False
             self.enable_redoc = False
 
-    def _get_production_cors_origins(self) -> List[str]:
+    def _get_production_cors_origins(self) -> list[str]:
         cors_origins_env = self.cors_origins
         if cors_origins_env:
             return [origin.strip() for origin in cors_origins_env]
@@ -124,11 +124,11 @@ class Settings(BaseSettings):
         return ["*"]
 
     @property
-    def docs_url(self) -> Optional[str]:
+    def docs_url(self) -> str | None:
         return "/docs" if self.enable_docs else None
 
     @property
-    def redoc_url(self) -> Optional[str]:
+    def redoc_url(self) -> str | None:
         return "/redoc" if self.enable_redoc else None
 
     @property
@@ -144,7 +144,7 @@ class Settings(BaseSettings):
         return self.env == "production"
 
 
-_settings_instance: Optional[Settings] = None
+_settings_instance: Settings | None = None
 
 
 @lru_cache(maxsize=1)

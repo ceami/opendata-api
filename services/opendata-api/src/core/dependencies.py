@@ -15,7 +15,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any
 
 from elasticsearch import Elasticsearch
 from fastapi import Depends, FastAPI, HTTPException
@@ -34,12 +34,12 @@ def get_rate_limit_exceeded_handler():
 
 
 class ServiceContainer:
-    _instance: Optional["ServiceContainer"] = None
-    _services: Dict[str, Any] = {}
-    _semaphores: Dict[str, asyncio.Semaphore] = {}
-    _loggers: Dict[str, logging.Logger] = {}
+    _instance: "ServiceContainer" | None = None
+    _services: dict[str, Any] = {}
+    _semaphores: dict[str, asyncio.Semaphore] = {}
+    _loggers: dict[str, logging.Logger] = {}
     _initialized: bool = False
-    _settings: Optional[Settings] = None
+    _settings: Settings | None = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -99,7 +99,7 @@ class ServiceContainer:
         self._loggers.clear()
         self._initialized = False
 
-    def health_check(self) -> Dict[str, Any]:
+    def health_check(self) -> dict[str, Any]:
         health_status = {
             "initialized": self._initialized,
             "services_count": len(self._services),
@@ -162,7 +162,7 @@ def get_service_container() -> ServiceContainer:
     return service_container
 
 
-def get_health_status() -> Dict[str, Any]:
+def get_health_status() -> dict[str, Any]:
     return service_container.health_check()
 
 
@@ -186,15 +186,15 @@ def get_mongo_client():
 
 
 def get_cross_collection_service():
-    from service.cross_collection import CrossCollectionService
+    from api.v1.application.catalog.catalog_service import CatalogService
 
     mongo_client = get_mongo_client()
-    logger = service_container.get_service_logger("cross_collection")
-    return CrossCollectionService(mongo_client, logger)
+    logger = service_container.get_service_logger("catalog")
+    return CatalogService(mongo_client, logger)
 
 
 def get_search_service():
-    from service.search import SearchService
+    from api.v1.application.search.search_provider import SearchProvider
 
     es_client = get_elasticsearch_client()
     if not es_client:
@@ -203,8 +203,27 @@ def get_search_service():
             detail="Elasticsearch 클라이언트를 사용할 수 없습니다.",
         )
 
-    return SearchService(es_client)
+    return SearchProvider(es_client)
 
 
 def get_logger_service(service_name: str):
     return service_container.get_service_logger(service_name)
+
+
+def get_app_search_service():
+    from api.v1.application.open_data.search_service import SearchAppService
+
+    return SearchAppService()
+
+
+def get_app_pagination_service():
+    from api.v1.application.open_data.pagination_service import PaginationAppService
+
+    cross = get_cross_collection_service()
+    return PaginationAppService(cross)
+
+
+def get_app_documents_service():
+    from api.v1.application.open_data.documents_service import DocumentsAppService
+
+    return DocumentsAppService()

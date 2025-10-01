@@ -19,8 +19,13 @@ from .open_data import (
     OpenFileInfo,
     ParsedAPIInfo,
     ParsedFileInfo,
+    RankLatest,
+    RankPopular,
+    RankTrending,
+    RankMetadata,
     SavedRequest,
 )
+from .comments import Comment
 
 __all__ = [
     "APIStdDocument",
@@ -30,5 +35,10 @@ __all__ = [
     "GeneratedFileDocs",
     "ParsedFileInfo",
     "OpenFileInfo",
+    "RankLatest",
+    "RankPopular",
+    "RankTrending",
+    "RankMetadata",
     "SavedRequest",
+    "Comment",
 ]

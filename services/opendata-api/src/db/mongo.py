@@ -19,6 +19,10 @@ from models import (
     GeneratedFileDocs,
     OpenAPIInfo,
     OpenFileInfo,
+    RankLatest,
+    RankPopular,
+    RankTrending,
+    RankMetadata,
     SavedRequest,
 )
 
@@ -38,6 +42,10 @@ class MongoDB:
                 OpenFileInfo,
                 GeneratedFileDocs,
                 GeneratedAPIDocs,
+                RankLatest,
+                RankPopular,
+                RankTrending,
+                RankMetadata,
                 SavedRequest,
             ],
         )

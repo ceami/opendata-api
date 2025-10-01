@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from datetime import datetime
-from typing import Any, Dict, Literal
+from typing import Any, Literal
 
 import pymongo
 from beanie import Document
@@ -279,8 +279,8 @@ class GeneratedAPIDocs(Document):
     markdown: str
     llm_model: str
     token_count: int
-    result_json: Dict[str, Any] | None = None
-    detail: Dict[str, Any] | None = None
+    result_json: dict[str, Any] | None = None
+    detail: dict[str, Any] | None = None
     generated_at: datetime | None = None
 
     class Settings:
@@ -306,8 +306,8 @@ class GeneratedFileDocs(Document):
     llm_model: str
     token_count: int
     status: bool | None = None
-    result_json: Dict[str, Any] | None = None
-    detail: Dict[str, Any] | None = None
+    result_json: dict[str, Any] | None = None
+    detail: dict[str, Any] | None = None
     generated_at: datetime | None = None
 
     class Settings:
@@ -336,4 +336,75 @@ class SavedRequest(Document):
         indexes = [
             "list_id",
             "created_at",
+        ]
+
+
+class RankBase(Document):
+    """정렬 스냅샷 공통 베이스 모델"""
+
+    list_id: int
+    data_type: str  # "API" | "FILE"
+    list_title: str | None = None
+    org_nm: str | None = None
+    token_count: int | None = None
+    has_generated_doc: bool | None = None
+    updated_at: datetime | None = None
+    generated_at: datetime | None = None
+    popularity_score: float | None = None
+    trending_score: float | None = None
+    rank: int
+
+
+class RankLatest(RankBase):
+    class Settings:
+        name = "rank_latest"
+        indexes = [
+            [
+                ("rank", pymongo.ASCENDING),
+            ],
+            [
+                ("list_id", pymongo.ASCENDING),
+            ],
+        ]
+
+
+class RankPopular(RankBase):
+    class Settings:
+        name = "rank_popular"
+        indexes = [
+            [
+                ("rank", pymongo.ASCENDING),
+            ],
+            [
+                ("list_id", pymongo.ASCENDING),
+            ],
+        ]
+
+
+class RankTrending(RankBase):
+    class Settings:
+        name = "rank_trending"
+        indexes = [
+            [
+                ("rank", pymongo.ASCENDING),
+            ],
+            [
+                ("list_id", pymongo.ASCENDING),
+            ],
+        ]
+
+
+class RankMetadata(Document):
+    """랭크 스냅샷 메타데이터 - total count 캐시"""
+    
+    sort_type: str  # "latest", "popular", "trending"
+    total_count: int
+    last_updated: datetime
+    
+    class Settings:
+        name = "rank_metadata"
+        indexes = [
+            [
+                ("sort_type", pymongo.ASCENDING),
+            ],
         ]
