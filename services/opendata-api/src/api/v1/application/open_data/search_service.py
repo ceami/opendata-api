@@ -13,8 +13,9 @@
 # limitations under the License.
 from typing import Any
 
-from models import GeneratedAPIDocs, GeneratedFileDocs, OpenAPIInfo, OpenFileInfo
+from api.v1.application.open_data.dto import SearchStdDocsItemDTO, SearchStdDocsResponseDTO
 from beanie.operators import In
+from models import GeneratedAPIDocs, GeneratedFileDocs, OpenAPIInfo, OpenFileInfo
 from utils.datetime_util import format_datetime
 
 
@@ -172,7 +173,7 @@ class SearchAppService:
         page: int,
         page_size: int,
         search_service: Any,
-    ) -> dict[str, Any]:
+    ) -> SearchStdDocsResponseDTO:
         api_doc_list_ids = await GeneratedAPIDocs.find().to_list()
         file_doc_list_ids = await GeneratedFileDocs.find().to_list()
         api_list_ids = [doc.list_id for doc in api_doc_list_ids]
@@ -242,7 +243,7 @@ class SearchAppService:
                     "title": doc.title,
                 }
 
-        results: list[dict[str, Any]] = []
+        results: list[SearchStdDocsItemDTO] = []
         for hit in paginated_hits:
             source = hit["_source"]
             list_id = source.get("list_id")
@@ -270,23 +271,38 @@ class SearchAppService:
                 title = source.get("title", "")
 
             results.append(
-                {
-                    "list_id": list_id,
-                    "list_title": list_title,
-                    "org_nm": org_nm,
-                    "title": title,
-                    "score": hit.get("_score"),
-                    "data_type": data_type,
-                    "detail": detail,
-                }
+                SearchStdDocsItemDTO(
+                    list_id=list_id,
+                    list_title=list_title,
+                    org_nm=org_nm,
+                    title=title,
+                    score=hit.get("_score"),
+                    data_type=data_type,
+                    detail=detail,
+                )
             )
 
-        return {
-            "total": len(filtered_hits),
-            "page": page,
-            "page_size": page_size,
-            "results": results,
-        }
+        return SearchStdDocsResponseDTO(
+            total=len(filtered_hits),
+            page=page,
+            page_size=page_size,
+            results=results,
+        )
+
+    async def search_titles_std_docs(
+        self,
+        *,
+        q: str,
+        page: int,
+        page_size: int,
+        search_service: Any,
+    ) -> SearchStdDocsResponseDTO:
+        return await self.search_titles_with_docs_multi(
+            queries=[q],
+            page=page,
+            page_size=page_size,
+            search_service=search_service,
+        )
 
     def get_index_stats(self, *, search_service: Any) -> dict[str, Any]:
         stats = search_service.get_index_stats()

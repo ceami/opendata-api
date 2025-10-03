@@ -17,14 +17,21 @@ from typing import Any, Literal
 import pymongo
 from beanie import Document
 
-from schemas import ParsedEndpoint
+from pydantic import BaseModel, Field
+
+
+class ParsedEndpoint(BaseModel):
+    id: str
+    path: str
+    method: str
+    request_schema: dict | None = Field(default=None)
+    response_schemas: dict | None = Field(default=None)
+    example_response_data: str | None = Field(default=None)
+    example_request_string: str | None = Field(default=None)
 
 
 class OpenFileInfo(Document):
-    """
-    OpenFileInfo 모델
-    공공데이터 포털에서 제공하는 파일 정보를 담는 모델
-    """
+    """OpenFileInfo 모델"""
 
     id: str
     core_data_nm: str | None
@@ -86,11 +93,7 @@ class OpenFileInfo(Document):
 
 
 class OpenAPIInfo(Document):
-    """
-    OpenAPIInfo 모델
-    공공데이터 포털에서 제공하는 API 응답 정보를 담는 모델
-    응답 정보 외에 추가 필드는 파싱 전 HTML 코드 저장 및 분류를 위한 필드
-    """
+    """OpenAPIInfo 모델"""
 
     id: str
     api_type: str
@@ -177,10 +180,7 @@ class OpenAPIInfo(Document):
 
 
 class ParsedAPIInfo(Document):
-    """
-    OpenDataInfo를 파서를 거쳐서 만들게 되는 최종 생성물
-    주석처리된 각 필드는 OpenDataInfo의 필드를 그대로 가져옴
-    """
+    """OpenDataInfo를 파서를 거쳐서 만들게 되는 최종 생성물"""
 
     id: str
     api_confirm_for_dev: str
@@ -216,9 +216,7 @@ class ParsedAPIInfo(Document):
 
 
 class ParsedFileInfo(Document):
-    """
-    OpenFileInfo를 파서를 거쳐서 만들게 되는 최종 생성물
-    """
+    """OpenFileInfo를 파서를 거쳐서 만들게 되는 최종 생성물"""
 
     id: str
     api_confirm_for_dev: str | None = None
@@ -253,9 +251,7 @@ class ParsedFileInfo(Document):
 
 
 class APIStdDocument(Document):
-    """API 표준 문서 모델
-    deprecated: 파서 업데이트로 인해 더 이상 사용되지 않음
-    """
+    """API 표준 문서 모델"""
 
     id: str
     list_id: int
@@ -340,10 +336,10 @@ class SavedRequest(Document):
 
 
 class RankBase(Document):
-    """정렬 스냅샷 공통 베이스 모델"""
+    """정렬 스냅샷 공통 모델"""
 
     list_id: int
-    data_type: str  # "API" | "FILE"
+    data_type: str
     list_title: str | None = None
     org_nm: str | None = None
     token_count: int | None = None
@@ -395,9 +391,9 @@ class RankTrending(RankBase):
 
 
 class RankMetadata(Document):
-    """랭크 스냅샷 메타데이터 - total count 캐시"""
+    """랭크 스냅샷 메타데이터"""
     
-    sort_type: str  # "latest", "popular", "trending"
+    sort_type: str
     total_count: int
     last_updated: datetime
     
@@ -406,5 +402,42 @@ class RankMetadata(Document):
         indexes = [
             [
                 ("sort_type", pymongo.ASCENDING),
+            ],
+        ]
+
+
+class RecommendationItem(BaseModel):
+    """추천 아이템 모델"""
+    doc_id: str
+    doc_type: str
+    similarity_score: float
+    rank: int
+
+
+class DocRecommendation(Document):
+    """문서 추천 모델"""
+    
+    target_doc_id: str
+    target_doc_type: str
+    recommendations: list[RecommendationItem]
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime
+    version: int = 1
+    
+    class Settings:
+        name = "doc_recommendations"
+        indexes = [
+            [
+                ("target_doc_id", pymongo.ASCENDING),
+            ],
+            [
+                ("expires_at", pymongo.ASCENDING),
+            ],
+            [
+                ("created_at", pymongo.ASCENDING),
+            ],
+            [
+                ("target_doc_type", pymongo.ASCENDING),
             ],
         ]

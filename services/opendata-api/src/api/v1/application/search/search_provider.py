@@ -37,10 +37,22 @@ class SearchProvider:
         else:
             base_query = self._build_fuzzy_match_query(query)
 
-        search_query = self._add_data_type_filter(base_query, data_type)
+        if data_type:
+            search_query = {"bool": {"must": [base_query, {"term": {"data_type": data_type}}]}}
+        else:
+            search_query = base_query
+
         search_body = {
             "query": search_query,
-            "highlight": self._get_highlight_config(),
+            "highlight": {
+                "fields": {
+                    "list_title": {},
+                    "title": {},
+                    "title.korean": {},
+                    "keywords": {},
+                    "org_nm": {},
+                }
+            },
             "size": size,
             "from": from_,
         }
@@ -102,24 +114,6 @@ class SearchProvider:
             }
         }
 
-    def _add_data_type_filter(
-        self, base_query: dict[str, Any], data_type: str | None
-    ) -> dict[str, Any]:
-        if data_type:
-            return {"bool": {"must": [base_query, {"term": {"data_type": data_type}}]}}
-        return base_query
-
-    def _get_highlight_config(self) -> dict[str, Any]:
-        return {
-            "fields": {
-                "list_title": {},
-                "title": {},
-                "title.korean": {},
-                "keywords": {},
-                "org_nm": {},
-            }
-        }
-
     def search_titles_with_weights(
         self,
         queries: list[str],
@@ -140,7 +134,15 @@ class SearchProvider:
 
         search_body = {
             "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
-            "highlight": {"fields": {"list_title": {}, "title": {}}},
+            "highlight": {
+                "fields": {
+                    "list_title": {},
+                    "title": {},
+                    "title.korean": {},
+                    "keywords": {},
+                    "org_nm": {},
+                }
+            },
             "size": size,
             "from": from_,
         }
@@ -213,7 +215,15 @@ class SearchProvider:
 
         search_body = {
             "query": strict_query,
-            "highlight": self._get_highlight_config(),
+            "highlight": {
+                "fields": {
+                    "list_title": {},
+                    "title": {},
+                    "title.korean": {},
+                    "keywords": {},
+                    "org_nm": {},
+                }
+            },
             "size": size,
             "from": from_,
         }

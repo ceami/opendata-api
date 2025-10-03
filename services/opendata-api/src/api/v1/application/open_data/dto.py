@@ -72,6 +72,23 @@ class PaginatedUnifiedDataDTO(BaseModel):
     has_prev: bool
 
 
+class RecommendationItemDTO(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+        alias_generator=AliasGenerator(
+            validation_alias=to_camel,
+            serialization_alias=to_camel,
+        ),
+        populate_by_name=True,
+    )
+
+    list_id: int
+    list_title: str
+    org_nm: str | None = None
+    data_type: str  # "API" 또는 "FILE"
+    similarity_score: float | None = None
+
+
 class DocumentDetailDTO(BaseModel):
     model_config = ConfigDict(
         extra="ignore",
@@ -98,6 +115,7 @@ class DocumentDetailDTO(BaseModel):
     token_count: int = 0
     generated_at: str | None = None
     markdown: str | None = None
+    recommendations: list[RecommendationItemDTO] = []
 
 
 class GeneratedDocumentDTO(BaseModel):
@@ -181,3 +199,38 @@ class CreateCommentDTO(BaseModel):
 
     list_id: int
     content: str
+
+
+class SearchStdDocsItemDTO(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+        alias_generator=AliasGenerator(
+            validation_alias=to_camel,
+            serialization_alias=to_camel,
+        ),
+        populate_by_name=True,
+    )
+
+    list_id: int
+    list_title: str
+    org_nm: str | None
+    title: str
+    score: float | None
+    data_type: str
+    detail: dict[str, Any] | None
+
+
+class SearchStdDocsResponseDTO(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+        alias_generator=AliasGenerator(
+            validation_alias=to_camel,
+            serialization_alias=to_camel,
+        ),
+        populate_by_name=True,
+    )
+
+    total: int
+    page: int
+    page_size: int
+    results: list[SearchStdDocsItemDTO]

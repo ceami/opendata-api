@@ -227,3 +227,9 @@ def get_app_documents_service():
     from api.v1.application.open_data.documents_service import DocumentsAppService
 
     return DocumentsAppService()
+
+
+def get_recommendation_service():
+    from recommend_system.recommendation_service import RecommendationService
+
+    return RecommendationService()

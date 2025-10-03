@@ -27,6 +27,7 @@ from api import (
     search_titles_router,
     search_titles_docs_router,
     comments_router,
+    recommendation_router,
 )
 from core.dependencies import (
     get_health_status,
@@ -75,6 +76,7 @@ app.include_router(admin_router, prefix="/api/v1", tags=["document"])
 app.include_router(search_titles_router, prefix="/api/v1", tags=["search"])
 app.include_router(search_titles_docs_router, prefix="/api/v1", tags=["search"])
 app.include_router(comments_router, prefix="/api/v1", tags=["comments"])
+app.include_router(recommendation_router, prefix="/api/v1", tags=["recommendation"])
 
 security = HTTPBasic()
 

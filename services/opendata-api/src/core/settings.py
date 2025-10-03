@@ -90,6 +90,8 @@ class Settings(BaseSettings):
         default="open_data_titles", alias="ELASTICSEARCH_INDEX"
     )
 
+    MILVUS_URL: str = Field(default="http://milvus:19530", alias="MILVUS_URL")
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._setup_environment_specific_settings()

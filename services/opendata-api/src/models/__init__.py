@@ -24,6 +24,7 @@ from .open_data import (
     RankTrending,
     RankMetadata,
     SavedRequest,
+    DocRecommendation,
 )
 from .comments import Comment
 
@@ -40,5 +41,6 @@ __all__ = [
     "RankTrending",
     "RankMetadata",
     "SavedRequest",
+    "DocRecommendation",
     "Comment",
 ]

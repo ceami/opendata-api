@@ -18,6 +18,7 @@ from .v1.routers.document_docs import docs_router
 from .v1.routers.document_stats import stats_router
 from .v1.routers.document_admin import admin_router
 from .v1.routers.comments import comments_router
+from .v1.routers.recommendation import router as recommendation_router
 
 __all__ = [
     "list_router",
@@ -27,4 +28,5 @@ __all__ = [
     "search_titles_router",
     "search_titles_docs_router",
     "comments_router",
+    "recommendation_router",
 ]

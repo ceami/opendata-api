@@ -24,6 +24,7 @@ from models import (
     RankTrending,
     RankMetadata,
     SavedRequest,
+    DocRecommendation,
 )
 
 
@@ -47,6 +48,7 @@ class MongoDB:
                 RankTrending,
                 RankMetadata,
                 SavedRequest,
+                DocRecommendation,
             ],
         )
 
@@ -54,7 +56,7 @@ class MongoDB:
     def get_db(cls) -> AsyncIOMotorDatabase:
         if cls._database is None:
             raise RuntimeError(
-                "MongoDB가 초기화되지 않았습니다. init() 메서드를 먼저 호출하세요."
+                "MongoDB가 초기화되지 않았습니다."
             )
         return cls._database
 
@@ -62,7 +64,7 @@ class MongoDB:
     def get_client(cls) -> AsyncIOMotorClient:
         if cls._client is None:
             raise RuntimeError(
-                "MongoDB가 초기화되지 않았습니다. init() 메서드를 먼저 호출하세요."
+                "MongoDB가 초기화되지 않았습니다."
             )
         return cls._client
 

@@ -13,7 +13,7 @@
 # limitations under the License.
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from elasticsearch import Elasticsearch
 
@@ -28,7 +28,7 @@ class TitleIndexer:
     def __init__(
         self,
         mongo_uri: str = None,
-        es_hosts: List[str] = None,
+        es_hosts: list[str] = None,
     ):
         settings = get_settings()
         if mongo_uri is None:
@@ -51,7 +51,7 @@ class TitleIndexer:
         )
         return mongo_client
 
-    async def get_all_open_api_info(self) -> List[Dict[str, Any]]:
+    async def get_all_open_api_info(self) -> list[dict[str, Any]]:
         try:
             documents = await OpenAPIInfo.find_all().to_list()
             return [doc.model_dump() for doc in documents]
@@ -59,7 +59,7 @@ class TitleIndexer:
             logger.error(f"OpenAPIInfo 조회 중 오류 발생: {e}")
             raise
 
-    async def get_all_open_file_info(self) -> List[Dict[str, Any]]:
+    async def get_all_open_file_info(self) -> list[dict[str, Any]]:
         try:
             documents = await OpenFileInfo.find_all().to_list()
             return [doc.model_dump() for doc in documents]
@@ -176,7 +176,7 @@ class TitleIndexer:
             logger.error(f"인덱스 생성 중 오류 발생: {e}")
             raise
 
-    def index_documents(self, documents: List[Dict[str, Any]]):
+    def index_documents(self, documents: list[dict[str, Any]]):
         try:
             api_count = 0
             file_count = 0
