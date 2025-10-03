@@ -62,6 +62,75 @@ services:
       - .env.${ENV}
     restart: always
 
+  milvus:
+    image: milvusdb/milvus:v2.4.4
+    container_name: opendata-milvus
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    expose:
+      - 19530
+      - 9091
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - milvus-data:/var/lib/milvus
+    depends_on:
+      - etcd
+      - minio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    env_file:
+      - .env.${ENV}
+    networks:
+      - opendata-network
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.13
+    container_name: opendata-etcd
+    restart: unless-stopped
+    expose:
+      - 2379
+      - 2380
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd-data:/etcd
+    env_file:
+      - .env.${ENV}
+    networks:
+      - opendata-network
+
+  minio:
+    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    container_name: opendata-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    expose:
+      - 9000
+      - 9001
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    env_file:
+      - .env.${ENV}
+    networks:
+      - opendata-network
+
+
 volumes:
   es-data:
   mongo-data:
