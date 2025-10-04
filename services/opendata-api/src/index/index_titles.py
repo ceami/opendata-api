@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 class TitleIndexer:
     def __init__(
         self,
-        mongo_uri: str = None,
-        es_hosts: list[str] = None,
+        mongo_uri: str | None = None,
+        es_hosts: list[str] | None = None,
     ):
         settings = get_settings()
         if mongo_uri is None:
@@ -37,7 +37,7 @@ class TitleIndexer:
             es_hosts = [settings.ELASTICSEARCH_URL]
 
         self.mongo_uri = mongo_uri
-        self.es = Elasticsearch(es_hosts)
+        self.es = Elasticsearch(hosts=es_hosts)
         self.index_name = settings.ELASTICSEARCH_INDEX_NAME
 
     async def initialize_beanie(self):
@@ -76,7 +76,10 @@ class TitleIndexer:
                         "analyzer": "nori_analyzer",
                         "search_analyzer": "nori_analyzer",
                         "fields": {
-                            "keyword": {"type": "keyword", "ignore_above": 256},
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256,
+                            },
                             "ngram": {
                                 "type": "text",
                                 "analyzer": "ngram_analyzer",
@@ -89,7 +92,10 @@ class TitleIndexer:
                         "analyzer": "english_analyzer",
                         "search_analyzer": "english_analyzer",
                         "fields": {
-                            "keyword": {"type": "keyword", "ignore_above": 256},
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256,
+                            },
                             "korean": {
                                 "type": "text",
                                 "analyzer": "nori_analyzer",
@@ -119,7 +125,11 @@ class TitleIndexer:
                         "nori_analyzer": {
                             "type": "nori",
                             "tokenizer": "nori_tokenizer",
-                            "filter": ["nori_readingform", "lowercase", "trim"],
+                            "filter": [
+                                "nori_readingform",
+                                "lowercase",
+                                "trim",
+                            ],
                         },
                         "english_analyzer": {
                             "type": "custom",
@@ -159,7 +169,7 @@ class TitleIndexer:
 
         try:
             if not self.es.indices.exists(index=self.index_name):
-                self.es.indices.create(index=self.index_name, body=mapping)
+                self.es.indices.create(index=self.index_name, **mapping)
         except Exception as e:
             logger.error(f"인덱스 생성 중 오류 발생: {e}")
             raise
@@ -202,12 +212,15 @@ class TitleIndexer:
                     file_count += 1
 
                 self.es.index(
-                    index=self.index_name, id=doc.get("list_id"), body=es_doc
+                    index=self.index_name,
+                    id=doc.get("list_id"),
+                    document=es_doc,
                 )
 
             self.es.indices.refresh(index=self.index_name)
             logger.info(
-                f"인덱싱 완료! API: {api_count}개, File: {file_count}개, 총 {len(documents)}개"
+                f"인덱싱 완료! API: {api_count}개, "
+                f"File: {file_count}개, 총 {len(documents)}개"
             )
         except Exception as e:
             logger.error(f"문서 인덱싱 중 오류 발생: {e}")

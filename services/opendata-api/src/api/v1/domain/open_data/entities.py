@@ -97,7 +97,10 @@ class UnifiedDataItem:
 
         if isinstance(self.data_type, DataKind):
             self.data_type = self.data_type.value
-        elif str(self.data_type) not in (DataKind.API.value, DataKind.FILE.value):
+        elif str(self.data_type) not in (
+            DataKind.API.value,
+            DataKind.FILE.value,
+        ):
             self.data_type = DataKind.API.value
 
 
@@ -112,7 +115,10 @@ class GeneratedDocMeta:
     def __post_init__(self) -> None:
         if isinstance(self.data_type, DataKind):
             self.data_type = self.data_type.value
-        elif str(self.data_type) not in (DataKind.API.value, DataKind.FILE.value):
+        elif str(self.data_type) not in (
+            DataKind.API.value,
+            DataKind.FILE.value,
+        ):
             self.data_type = DataKind.API.value
         self.token_count = _coerce_int(self.token_count, default=0)
         self.generated_at = _coerce_datetime(self.generated_at)
@@ -135,10 +141,15 @@ class RankedItem:
     def __post_init__(self) -> None:
         if isinstance(self.data_type, DataKind):
             self.data_type = self.data_type.value
-        elif str(self.data_type) not in (DataKind.API.value, DataKind.FILE.value):
+        elif str(self.data_type) not in (
+            DataKind.API.value,
+            DataKind.FILE.value,
+        ):
             self.data_type = DataKind.API.value
         self.token_count = _coerce_int(self.token_count, default=0)
         self.popularity_score = _coerce_int(self.popularity_score, default=0)
-        self.rank = None if self.rank is None else _coerce_int(self.rank, default=0)
+        self.rank = (
+            None if self.rank is None else _coerce_int(self.rank, default=0)
+        )
         self.updated_at = _coerce_datetime(self.updated_at)
         self.generated_at = _coerce_datetime(self.generated_at)

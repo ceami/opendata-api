@@ -20,23 +20,21 @@ from pymilvus import MilvusClient
 
 from core.settings import get_settings
 from db.mongo import MongoDB
-from models import DocRecommendation, RecommendationItem
+from models import DocRecommendation
+from models.open_data import RecommendationItem
 
 
 def recommend_similar_documents(
     client: MilvusClient,
     collection_name: str,
-    target_embedding: np.ndarray, 
+    target_embedding: np.ndarray,
     target_doc_id: str,
-    top_k: int = 4, 
-    threshold: float = 0.5
+    top_k: int = 4,
+    threshold: float = 0.5,
 ) -> list[dict[str, Any]]:
     """Milvus를 사용하여 유사한 문서를 추천"""
     try:
-        search_params = {
-            "metric_type": "COSINE",
-            "params": {"nprobe": 10}
-        }
+        search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
 
         results = client.search(
             collection_name=collection_name,
@@ -44,22 +42,24 @@ def recommend_similar_documents(
             anns_field="vector",
             search_params=search_params,
             limit=top_k + 1,
-            output_fields=["doc_id", "doc_type"]
+            output_fields=["doc_id", "doc_type"],
         )
 
         recommendations = []
         print(f"\n--- 추천 기준 문서: {target_doc_id} ---")
-        
+
         for hit in results[0]:
             doc_id = hit.get("doc_id")
             score = hit.get("distance", 0)
 
             if doc_id != target_doc_id and score >= threshold:
-                recommendations.append({
-                    "doc_id": doc_id,
-                    "doc_type": hit.get("doc_type", "API"),
-                    "similarity_score": float(score)
-                })
+                recommendations.append(
+                    {
+                        "doc_id": doc_id,
+                        "doc_type": hit.get("doc_type", "API"),
+                        "similarity_score": float(score),
+                    }
+                )
 
                 if len(recommendations) >= top_k:
                     break
@@ -76,7 +76,7 @@ async def store_recommendations_in_mongo(
     target_doc_id: str,
     target_doc_type: str,
     recommendations: list[dict[str, Any]],
-    ttl_days: int = 7
+    ttl_days: int = 7,
 ) -> bool:
     """추천 결과를 MongoDB에 저장"""
     try:
@@ -86,7 +86,7 @@ async def store_recommendations_in_mongo(
                 doc_id=rec["doc_id"],
                 doc_type=rec.get("doc_type", "API"),
                 similarity_score=rec["similarity_score"],
-                rank=i + 1
+                rank=i + 1,
             )
             recommendation_items.append(item)
 
@@ -112,7 +112,7 @@ async def store_recommendations_in_mongo(
                 created_at=now,
                 updated_at=now,
                 expires_at=expires_at,
-                version=1
+                version=1,
             )
             await new_rec.save()
             print(f"추천 결과 저장 완료: {target_doc_id}")
@@ -132,11 +132,16 @@ async def recommend_and_store_in_mongo(
     target_doc_type: str = "API",
     top_k: int = 4,
     threshold: float = 0.6,
-    ttl_days: int = 7
+    ttl_days: int = 7,
 ) -> list[dict[str, Any]]:
     """문서 추천을 수행하고 결과를 MongoDB에 저장"""
     recommendations = recommend_similar_documents(
-        client, milvus_collection_name, target_embedding, target_doc_id, top_k, threshold
+        client,
+        milvus_collection_name,
+        target_embedding,
+        target_doc_id,
+        top_k,
+        threshold,
     )
 
     if recommendations:
@@ -148,28 +153,31 @@ async def recommend_and_store_in_mongo(
 
 
 async def get_stored_recommendations(
-    target_doc_id: str,
-    top_k: int = 4
+    target_doc_id: str, top_k: int = 4
 ) -> list[dict[str, Any]] | None:
     """MongoDB에서 저장된 추천 결과를 조회"""
     try:
         now = datetime.utcnow()
         result = await DocRecommendation.find_one(
             DocRecommendation.target_doc_id == target_doc_id,
-            DocRecommendation.expires_at > now
+            DocRecommendation.expires_at > now,
         )
 
         if result:
             recommendations = []
             for item in result.recommendations[:top_k]:
-                recommendations.append({
-                    "doc_id": item.doc_id,
-                    "doc_type": item.doc_type,
-                    "similarity_score": item.similarity_score,
-                    "rank": item.rank
-                })
+                recommendations.append(
+                    {
+                        "doc_id": item.doc_id,
+                        "doc_type": item.doc_type,
+                        "similarity_score": item.similarity_score,
+                        "rank": item.rank,
+                    }
+                )
 
-            print(f"저장된 추천 결과 조회 완료: {target_doc_id} ({len(recommendations)}개)")
+            print(
+                f"저장된 추천 결과 조회 완료: {target_doc_id} ({len(recommendations)}개)"
+            )
             return recommendations
         else:
             print(f"저장된 추천 결과 없음 또는 만료됨: {target_doc_id}")
@@ -184,10 +192,10 @@ async def main():
     """테스트용 메인 함수"""
     settings = get_settings()
     await MongoDB.init(settings.MONGO_URL, settings.MONGO_DB)
-    
+
     client = MilvusClient(uri=get_settings().MILVUS_URL)
     collection_name = "recommendation_db"
-    
+
     target_doc_id = "15000017"
     target_doc_type = "API"
 
@@ -195,7 +203,7 @@ async def main():
         result = client.query(
             collection_name=collection_name,
             filter=f'doc_id == "{target_doc_id}"',
-            output_fields=["vector"]
+            output_fields=["vector"],
         )
 
         if result:
@@ -209,7 +217,9 @@ async def main():
                     target_doc_id, target_doc_type, recommendations
                 )
 
-            stored_recommendations = await get_stored_recommendations(target_doc_id)
+            stored_recommendations = await get_stored_recommendations(
+                target_doc_id
+            )
             print("저장된 추천 결과:", stored_recommendations)
         else:
             print(f"문서 '{target_doc_id}'를 찾을 수 없습니다.")

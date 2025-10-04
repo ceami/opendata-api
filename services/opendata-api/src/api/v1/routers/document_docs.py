@@ -13,22 +13,29 @@
 # limitations under the License.
 import logging
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+)
 
 from api.v1.application.open_data.dto import (
     DocumentDetailDTO,
     GeneratedDocItemDTO,
-    SaveRequestDTO,
     RecommendationItemDTO,
+    SaveRequestDTO,
 )
 from core.dependencies import (
-    get_logger_service,
     get_app_documents_service,
+    get_logger_service,
     get_recommendation_service,
     limiter,
 )
 from models import OpenAPIInfo, OpenFileInfo
-
 
 docs_router = APIRouter(prefix="/document", tags=["docs"])
 
@@ -37,11 +44,15 @@ docs_router = APIRouter(prefix="/document", tags=["docs"])
 @limiter.limit("60/minute")
 async def get_generated_documents(
     request: Request,
-    list_ids: list[int] | None = Query(None, description="조회할 list_id 목록 (미입력시 전체 조회)"),
+    list_ids: list[int] | None = Query(
+        None, description="조회할 list_id 목록 (미입력시 전체 조회)"
+    ),
     page: int = Query(1, ge=1, description="페이지 번호"),
     page_size: int = Query(10, ge=1, le=100, description="페이지 크기"),
     documents_service=Depends(get_app_documents_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("document_docs")),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_docs")
+    ),
 ):
     try:
         return await documents_service.get_generated_documents(
@@ -57,10 +68,14 @@ async def get_generated_documents(
 async def get_std_doc_detail(
     request: Request,
     list_id: int = Path(..., ge=1),
-    include_recommendations: bool = Query(True, description="추천 아이템 포함 여부"),
+    include_recommendations: bool = Query(
+        True, description="추천 아이템 포함 여부"
+    ),
     documents_service=Depends(get_app_documents_service),
     recommendation_service=Depends(get_recommendation_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("document_docs")),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_docs")
+    ),
 ):
     try:
         doc_detail = await documents_service.get_std_doc_detail(list_id=list_id)
@@ -72,34 +87,48 @@ async def get_std_doc_detail(
                     doc_id=str(list_id),
                     target_doc_type=doc_detail.data_type,
                     top_k=4,
-                    use_cache=True
+                    use_cache=True,
                 )
 
                 for rec in rec_results:
                     try:
                         doc_id_int = int(rec["doc_id"])
 
-                        api_doc = await OpenAPIInfo.find_one(OpenAPIInfo.list_id == doc_id_int)
-                        file_doc = await OpenFileInfo.find_one(OpenFileInfo.list_id == doc_id_int)
+                        api_doc = await OpenAPIInfo.find_one(
+                            OpenAPIInfo.list_id == doc_id_int
+                        )
+                        file_doc = await OpenFileInfo.find_one(
+                            OpenFileInfo.list_id == doc_id_int
+                        )
 
                         if api_doc:
-                            recommendations.append(RecommendationItemDTO(
-                                list_id=api_doc.list_id,
-                                list_title=api_doc.list_title,
-                                org_nm=api_doc.org_nm,
-                                data_type="API",
-                                similarity_score=rec.get("similarity_score")
-                            ))
+                            recommendations.append(
+                                RecommendationItemDTO(
+                                    list_id=api_doc.list_id,
+                                    list_title=api_doc.list_title,
+                                    org_nm=api_doc.org_nm,
+                                    data_type="API",
+                                    similarity_score=rec.get(
+                                        "similarity_score"
+                                    ),
+                                )
+                            )
                         elif file_doc:
-                            recommendations.append(RecommendationItemDTO(
-                                list_id=file_doc.list_id,
-                                list_title=file_doc.list_title,
-                                org_nm=file_doc.org_nm,
-                                data_type="FILE",
-                                similarity_score=rec.get("similarity_score")
-                            ))
+                            recommendations.append(
+                                RecommendationItemDTO(
+                                    list_id=file_doc.list_id or 0,
+                                    list_title=file_doc.list_title or "",
+                                    org_nm=file_doc.org_nm,
+                                    data_type="FILE",
+                                    similarity_score=rec.get(
+                                        "similarity_score"
+                                    ),
+                                )
+                            )
                     except (ValueError, Exception) as e:
-                        logger.warning(f"추천 아이템 {rec.get('doc_id')} 변환 실패: {e}")
+                        logger.warning(
+                            f"추천 아이템 {rec.get('doc_id')} 변환 실패: {e}"
+                        )
                         continue
 
             except Exception as e:
@@ -122,7 +151,9 @@ async def save_request(
     request: Request,
     body: SaveRequestDTO = Body(..., description="저장할 list_id 또는 url"),
     documents_service=Depends(get_app_documents_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("document_docs")),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_docs")
+    ),
 ):
     try:
         return await documents_service.save_request(

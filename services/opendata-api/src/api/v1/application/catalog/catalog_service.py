@@ -14,31 +14,34 @@
 import asyncio
 import logging
 import math
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
+from api.v1.application.utils.pagination import (
+    calculate_offset,
+    validate_pagination_params,
+)
+from api.v1.domain.open_data.entities import UnifiedDataItem
 from models import (
     GeneratedAPIDocs,
     GeneratedFileDocs,
     OpenAPIInfo,
     OpenFileInfo,
     RankLatest,
+    RankMetadata,
     RankPopular,
     RankTrending,
-    RankMetadata,
-)
-from api.v1.domain.open_data.entities import UnifiedDataItem
-from api.v1.application.utils.pagination import (
-    calculate_offset,
-    validate_pagination_params,
 )
 
 
 class CatalogService:
     def __init__(
-        self, mongo_client: AsyncIOMotorClient, logger: logging.Logger | None = None
+        self,
+        mongo_client: AsyncIOMotorClient,
+        logger: logging.Logger | None = None,
     ):
         self.mongo_client = mongo_client
         self.open_data_db = self.mongo_client.open_data
@@ -63,17 +66,21 @@ class CatalogService:
         paginated_data = all_data[start_idx:end_idx]
 
         return {
-            "data": [item.model_dump() for item in paginated_data],
+            "data": [asdict(item) for item in paginated_data],
             "total": len(all_data),
             "page": page,
             "size": size,
         }
 
-    async def _get_search_list_ids(self, query: str, size: int, search_service) -> list[str]:
+    async def _get_search_list_ids(
+        self, query: str, size: int, search_service
+    ) -> list[str]:
         if not search_service:
             return []
         search_size = max(size * 3, 10)
-        hits = search_service.search_titles(query=query, size=search_size, from_=0)
+        hits = search_service.search_titles(
+            query=query, size=search_size, from_=0
+        )
         return [hit["_source"].get("list_id") for hit in hits["hits"]]
 
     async def _get_api_data(self, list_ids: list[str]) -> list[UnifiedDataItem]:
@@ -82,11 +89,15 @@ class CatalogService:
         api_list_ids = self._convert_to_int_list_ids(list_ids)
         if not api_list_ids:
             return []
-        api_docs = await OpenAPIInfo.find({"list_id": {"$in": api_list_ids}}).to_list()
+        api_docs = await OpenAPIInfo.find(
+            {"list_id": {"$in": api_list_ids}}
+        ).to_list()
 
         api_data: list[UnifiedDataItem] = []
         for doc in api_docs:
-            generated_doc = await GeneratedAPIDocs.find_one({"list_id": doc.list_id})
+            generated_doc = await GeneratedAPIDocs.find_one(
+                {"list_id": doc.list_id}
+            )
             item = UnifiedDataItem(
                 list_id=doc.list_id,
                 title=doc.list_title,
@@ -98,7 +109,9 @@ class CatalogService:
                 pricing=doc.is_charged,
                 copyright=doc.is_copyrighted,
                 third_party_copyright=doc.is_third_party_copyrighted,
-                keywords=doc.keywords if isinstance(doc.keywords, list) else [],
+                keywords=(
+                    doc.keywords if isinstance(doc.keywords, list) else []
+                ),
                 register_status=doc.register_status or "",
                 request_cnt=doc.request_cnt,
                 created_at=doc.created_at,
@@ -114,14 +127,20 @@ class CatalogService:
             api_data.append(item)
         return api_data
 
-    async def _get_file_data(self, list_ids: list[str]) -> list[UnifiedDataItem]:
+    async def _get_file_data(
+        self, list_ids: list[str]
+    ) -> list[UnifiedDataItem]:
         if not list_ids:
             return []
-        file_docs = await OpenFileInfo.find({"list_id": {"$in": list_ids}}).to_list()
+        file_docs = await OpenFileInfo.find(
+            {"list_id": {"$in": list_ids}}
+        ).to_list()
 
         file_data: list[UnifiedDataItem] = []
         for doc in file_docs:
-            generated_doc = await GeneratedFileDocs.find_one({"list_id": doc.list_id})
+            generated_doc = await GeneratedFileDocs.find_one(
+                {"list_id": doc.list_id}
+            )
             item = UnifiedDataItem(
                 list_id=int(doc.list_id) if doc.list_id else 0,
                 title=doc.list_title or doc.title or "",
@@ -132,8 +151,10 @@ class CatalogService:
                 data_format=doc.data_type or "",
                 pricing=doc.is_charged,
                 copyright=doc.is_copyrighted,
-                third_party_copyright=doc.is_third_party_copyrighted or "",
-                keywords=doc.keywords if isinstance(doc.keywords, list) else [],
+                third_party_copyright=(doc.is_third_party_copyrighted or ""),
+                keywords=(
+                    doc.keywords if isinstance(doc.keywords, list) else []
+                ),
                 register_status=doc.register_status or "",
                 request_cnt=doc.download_cnt or 0,
                 created_at=doc.created_at,
@@ -200,7 +221,9 @@ class CatalogService:
         unique_data = self._merge_and_deduplicate_data(api_data, file_data)
 
         if sort_by == "popular":
-            unique_data.sort(key=lambda x: x.get("request_cnt", 0), reverse=True)
+            unique_data.sort(
+                key=lambda x: x.get("request_cnt", 0), reverse=True
+            )
         else:
             unique_data.sort(
                 key=lambda x: x.get("updated_at") or datetime.min, reverse=True
@@ -213,10 +236,16 @@ class CatalogService:
         total_count = len(unique_data)
 
         self.logger.info(
-            f"[CatalogService] 조회 완료: API={len(api_data)}개, File={len(file_data)}개, 총 {len(paginated_data)}개 반환"
+            f"[CatalogService] 조회 완료: API={len(api_data)}개, "
+            f"File={len(file_data)}개, 총 {len(paginated_data)}개 반환"
         )
 
-        return {"data": paginated_data, "total": total_count, "page": page, "size": size}
+        return {
+            "data": paginated_data,
+            "total": total_count,
+            "page": page,
+            "size": size,
+        }
 
     async def rebuild_rank_snapshots(self) -> dict[str, int]:
         now = datetime.now(timezone.utc)
@@ -252,18 +281,22 @@ class CatalogService:
             file_generated_map[g.list_id] = g
 
         for doc in file_docs:
-            gen = file_generated_map.get(doc.list_id)
+            gen = file_generated_map.get(int(doc.list_id) if doc.list_id else 0)
             rows.append(
                 {
                     "list_id": int(doc.list_id) if doc.list_id else 0,
                     "data_type": "FILE",
-                    "list_title": getattr(doc, "list_title", None) or getattr(doc, "title", None),
-                    "org_nm": getattr(doc, "org_nm", None) or getattr(doc, "dept_nm", None),
+                    "list_title": getattr(doc, "list_title", None)
+                    or getattr(doc, "title", None),
+                    "org_nm": getattr(doc, "org_nm", None)
+                    or getattr(doc, "dept_nm", None),
                     "token_count": gen.token_count if gen else 0,
                     "has_generated_doc": gen is not None,
                     "updated_at": doc.updated_at,
                     "generated_at": getattr(gen, "generated_at", None),
-                    "popularity_score": int(getattr(doc, "download_cnt", 0) or 0),
+                    "popularity_score": int(
+                        getattr(doc, "download_cnt", 0) or 0
+                    ),
                 }
             )
 
@@ -272,10 +305,16 @@ class CatalogService:
             key=lambda r: (r.get("generated_at") or r.get("updated_at") or now),
             reverse=True,
         )
-        await self._bulk_upsert_rank(RankLatest, latest_sorted[:1000], score_field=None)
+        await self._bulk_upsert_rank(
+            RankLatest, latest_sorted[:1000], score_field=None
+        )
 
-        popular_sorted = sorted(rows, key=lambda r: r.get("popularity_score", 0), reverse=True)
-        await self._bulk_upsert_rank(RankPopular, popular_sorted[:1000], score_field=None)
+        popular_sorted = sorted(
+            rows, key=lambda r: r.get("popularity_score", 0), reverse=True
+        )
+        await self._bulk_upsert_rank(
+            RankPopular, popular_sorted[:1000], score_field=None
+        )
 
         trending_rows: list[dict[str, Any]] = []
         for r in rows:
@@ -284,13 +323,19 @@ class CatalogService:
                 updated_at = updated_at.replace(tzinfo=now.tzinfo)
             hours = max(1.0, (now - updated_at).total_seconds() / 3600.0)
             base = max(0.0, float(r.get("popularity_score", 0)))
-            trending_score = math.log1p(base) / (hours ** 1.5)
+            trending_score = math.log1p(base) / (hours**1.5)
             r2 = dict(r)
             r2["trending_score"] = trending_score
             trending_rows.append(r2)
 
-        trending_sorted = sorted(trending_rows, key=lambda r: r.get("trending_score", 0.0), reverse=True)
-        await self._bulk_upsert_rank(RankTrending, trending_sorted[:1000], score_field="trending_score")
+        trending_sorted = sorted(
+            trending_rows,
+            key=lambda r: r.get("trending_score", 0.0),
+            reverse=True,
+        )
+        await self._bulk_upsert_rank(
+            RankTrending, trending_sorted[:1000], score_field="trending_score"
+        )
 
         seen_list_ids = set()
         unique_rows = []
@@ -301,9 +346,11 @@ class CatalogService:
                 unique_rows.append(row)
         total_count = len(unique_rows)
         now_utc = datetime.now(datetime.now().astimezone().tzinfo)
-        
+
         for sort_type in ["latest", "popular", "trending"]:
-            await RankMetadata.find_one(RankMetadata.sort_type == sort_type).delete()
+            await RankMetadata.find_one(
+                RankMetadata.sort_type == sort_type
+            ).delete()
             metadata = RankMetadata(
                 sort_type=sort_type,
                 total_count=total_count,
@@ -311,7 +358,11 @@ class CatalogService:
             )
             await metadata.insert()
 
-        return {"latest": len(latest_sorted), "popular": len(popular_sorted), "trending": len(trending_sorted)}
+        return {
+            "latest": len(latest_sorted),
+            "popular": len(popular_sorted),
+            "trending": len(trending_sorted),
+        }
 
     async def _bulk_upsert_rank(
         self,
@@ -319,11 +370,11 @@ class CatalogService:
         sorted_rows: list[dict[str, Any]],
         score_field: str | None,
     ) -> None:
-        bulk: list[model] = []
+        bulk: list[Any] = []
         for idx, r in enumerate(sorted_rows, start=1):
             doc = model(
                 list_id=r["list_id"],
-                data_type=r.get("data_type"),
+                data_type=r.get("data_type") or "API",
                 list_title=r.get("list_title"),
                 org_nm=r.get("org_nm"),
                 token_count=r.get("token_count"),
@@ -343,21 +394,34 @@ class CatalogService:
         await model.insert_many(bulk)
 
     async def get_ranked_snapshots(
-        self, sort_by: Literal["latest", "popular", "trending"], page: int, size: int
+        self,
+        sort_by: Literal["latest", "popular", "trending"],
+        page: int,
+        size: int,
     ) -> dict[str, Any]:
         page, size = validate_pagination_params(page, size)
         skip = calculate_offset(page, size)
 
-        model_map = {"latest": RankLatest, "popular": RankPopular, "trending": RankTrending}
+        model_map = {
+            "latest": RankLatest,
+            "popular": RankPopular,
+            "trending": RankTrending,
+        }
         model = model_map[sort_by]
 
         max_page_in_snapshot = 1000 // size
 
-        metadata = await RankMetadata.find_one(RankMetadata.sort_type == sort_by)
+        metadata = await RankMetadata.find_one(
+            RankMetadata.sort_type == sort_by
+        )
         total = metadata.total_count if metadata else 0
 
         if page > max_page_in_snapshot:
-            return {"redirect_to_original": True, "reason": "page_exceeds_snapshot_limit", "total": total}
+            return {
+                "redirect_to_original": True,
+                "reason": "page_exceeds_snapshot_limit",
+                "total": total,
+            }
 
         docs = await model.find().sort("rank").skip(skip).limit(size).to_list()
 
@@ -409,7 +473,9 @@ class CatalogService:
         sort_conditions[sort_field] = sort_order
         return sort_conditions
 
-    def _build_api_pipeline(self, sort_conditions: dict[str, int]) -> list[dict]:
+    def _build_api_pipeline(
+        self, sort_conditions: dict[str, int]
+    ) -> list[dict]:
         pipeline = [
             {
                 "$lookup": {
@@ -429,7 +495,12 @@ class CatalogService:
                     "token_count": {
                         "$cond": [
                             {"$gt": [{"$size": "$generated_docs"}, 0]},
-                            {"$arrayElemAt": ["$generated_docs.token_count", 0]},
+                            {
+                                "$arrayElemAt": [
+                                    "$generated_docs.token_count",
+                                    0,
+                                ]
+                            },
                             0,
                         ]
                     },
@@ -448,7 +519,9 @@ class CatalogService:
             pipeline.append({"$sort": sort_conditions})
         return pipeline
 
-    def _build_file_pipeline(self, sort_conditions: dict[str, int], sort_by: str) -> list[dict]:
+    def _build_file_pipeline(
+        self, sort_conditions: dict[str, int], sort_by: str
+    ) -> list[dict]:
         pipeline = [
             {
                 "$lookup": {
@@ -468,7 +541,12 @@ class CatalogService:
                     "token_count": {
                         "$cond": [
                             {"$gt": [{"$size": "$generated_docs"}, 0]},
-                            {"$arrayElemAt": ["$generated_docs.token_count", 0]},
+                            {
+                                "$arrayElemAt": [
+                                    "$generated_docs.token_count",
+                                    0,
+                                ]
+                            },
                             0,
                         ]
                     },
@@ -492,7 +570,9 @@ class CatalogService:
             pipeline.append({"$sort": file_sort_conditions})
         return pipeline
 
-    def _merge_and_deduplicate_data(self, api_data: list, file_data: list) -> list:
+    def _merge_and_deduplicate_data(
+        self, api_data: list, file_data: list
+    ) -> list:
         all_data = api_data + file_data
         seen_ids = set()
         unique_data = []
@@ -517,7 +597,13 @@ class CatalogService:
             "api_docs_count": total_api_docs,
             "file_data_count": total_file_data,
             "file_docs_count": total_file_docs,
-            "api_coverage": (total_api_docs / total_api_data * 100) if total_api_data > 0 else 0,
-            "file_coverage": (total_file_docs / total_file_data * 100) if total_file_data > 0 else 0,
-            "total_coverage": (total_generated_docs / total_open_data * 100) if total_open_data > 0 else 0,
+            "api_coverage": (total_api_docs / total_api_data * 100)
+            if total_api_data > 0
+            else 0,
+            "file_coverage": (total_file_docs / total_file_data * 100)
+            if total_file_data > 0
+            else 0,
+            "total_coverage": (total_generated_docs / total_open_data * 100)
+            if total_open_data > 0
+            else 0,
         }

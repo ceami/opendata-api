@@ -16,14 +16,15 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from api.v1.application.open_data.dto import SearchStdDocsResponseDTO
-from api.v1.application.search.search_provider import SearchProvider as SearchService
+from api.v1.application.search.search_provider import (
+    SearchProvider as SearchService,
+)
 from core.dependencies import (
-    get_logger_service,
     get_app_search_service,
+    get_logger_service,
     get_search_service,
     limiter,
 )
-
 
 search_titles_docs_router = APIRouter(prefix="/search")
 
@@ -31,7 +32,9 @@ search_titles_docs_router = APIRouter(prefix="/search")
 @search_titles_docs_router.get(
     path="/title/std-docs",
     response_model=SearchStdDocsResponseDTO,
-    responses={status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Server error"}},
+    responses={
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Server error"}
+    },
     description="제목으로 공공 데이터 검색",
 )
 @limiter.limit("60/minute")
@@ -42,7 +45,9 @@ async def search_titles_with_docs(
     page_size: int = Query(10, ge=1, le=100, description="페이지 크기"),
     search_service: SearchService = Depends(get_search_service),
     search_app_service=Depends(get_app_search_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("search_titles_docs")),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("search_titles_docs")
+    ),
 ):
     try:
         res = await search_app_service.search_titles_std_docs(

@@ -20,14 +20,14 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.cors import CORSMiddleware
 
 from api import (
-    list_router,
-    docs_router,
-    stats_router,
     admin_router,
-    search_titles_router,
-    search_titles_docs_router,
     comments_router,
+    docs_router,
+    list_router,
     recommendation_router,
+    search_titles_docs_router,
+    search_titles_router,
+    stats_router,
 )
 from core.dependencies import (
     get_health_status,
@@ -76,7 +76,9 @@ app.include_router(admin_router, prefix="/api/v1", tags=["document"])
 app.include_router(search_titles_router, prefix="/api/v1", tags=["search"])
 app.include_router(search_titles_docs_router, prefix="/api/v1", tags=["search"])
 app.include_router(comments_router, prefix="/api/v1", tags=["comments"])
-app.include_router(recommendation_router, prefix="/api/v1", tags=["recommendation"])
+app.include_router(
+    recommendation_router, prefix="/api/v1", tags=["recommendation"]
+)
 
 security = HTTPBasic()
 
