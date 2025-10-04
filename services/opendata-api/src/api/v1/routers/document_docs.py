@@ -134,10 +134,8 @@ async def get_std_doc_detail(
             except Exception as e:
                 logger.warning(f"추천 조회 실패: {e}")
 
-        # dict를 DocumentDetailDTO로 변환
         doc_detail_dict["recommendations"] = recommendations
-        
-        # datetime 객체를 문자열로 변환
+
         if doc_detail_dict.get("created_at"):
             doc_detail_dict["created_at"] = doc_detail_dict["created_at"].isoformat()
         if doc_detail_dict.get("updated_at"):
