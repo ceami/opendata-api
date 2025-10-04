@@ -11,8 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
 import logging
 
+from beanie.operators import In
 from fastapi import (
     APIRouter,
     Body,
@@ -78,70 +80,99 @@ async def get_std_doc_detail(
     ),
 ):
     try:
-        doc_detail_dict = await documents_service.get_std_doc_detail(list_id=list_id)
+        doc_detail_dict = await documents_service.get_std_doc_detail(
+            list_id=list_id
+        )
 
         recommendations = []
         if include_recommendations:
             try:
-                rec_results = await recommendation_service.get_recommendations(
-                    doc_id=str(list_id),
-                    target_doc_type=doc_detail_dict["data_type"],
-                    top_k=4,
-                    use_cache=True,
+                rec_results = await asyncio.wait_for(
+                    recommendation_service.get_recommendations_from_cache(
+                        doc_id=str(list_id), top_k=4
+                    ),
+                    timeout=5.0,
                 )
 
-                for rec in rec_results:
-                    try:
-                        doc_id_int = int(rec["doc_id"])
-
-                        api_doc = await OpenAPIInfo.find_one(
-                            OpenAPIInfo.list_id == doc_id_int
-                        )
-                        file_doc = await OpenFileInfo.find_one(
-                            OpenFileInfo.list_id == doc_id_int
-                        )
-
-                        if api_doc:
-                            recommendations.append(
-                                RecommendationItemDTO(
-                                    list_id=api_doc.list_id,
-                                    list_title=api_doc.list_title,
-                                    org_nm=api_doc.org_nm,
-                                    data_type="API",
-                                    similarity_score=rec.get(
-                                        "similarity_score"
-                                    ),
-                                )
+                if rec_results:
+                    doc_ids = []
+                    for rec in rec_results:
+                        try:
+                            doc_id_int = int(rec["doc_id"])
+                            doc_ids.append(doc_id_int)
+                        except (ValueError, Exception) as e:
+                            logger.warning(
+                                f"추천 아이템 {rec.get('doc_id')} 변환 실패: {e}"
                             )
-                        elif file_doc:
-                            recommendations.append(
-                                RecommendationItemDTO(
-                                    list_id=file_doc.list_id or 0,
-                                    list_title=file_doc.list_title or "",
-                                    org_nm=file_doc.org_nm,
-                                    data_type="FILE",
-                                    similarity_score=rec.get(
-                                        "similarity_score"
-                                    ),
-                                )
-                            )
-                    except (ValueError, Exception) as e:
-                        logger.warning(
-                            f"추천 아이템 {rec.get('doc_id')} 변환 실패: {e}"
-                        )
-                        continue
+                            continue
 
+                    if doc_ids:
+                        api_docs = await OpenAPIInfo.find(
+                            In(OpenAPIInfo.list_id, doc_ids)
+                        ).to_list()
+                        file_docs = await OpenFileInfo.find(
+                            In(OpenFileInfo.list_id, doc_ids)
+                        ).to_list()
+
+                        api_docs_dict = {doc.list_id: doc for doc in api_docs}
+                        file_docs_dict = {doc.list_id: doc for doc in file_docs}
+
+                        for rec in rec_results:
+                            try:
+                                doc_id_int = int(rec["doc_id"])
+
+                                if doc_id_int in api_docs_dict:
+                                    api_doc = api_docs_dict[doc_id_int]
+                                    recommendations.append(
+                                        RecommendationItemDTO(
+                                            list_id=api_doc.list_id,
+                                            list_title=api_doc.list_title,
+                                            org_nm=api_doc.org_nm,
+                                            data_type="API",
+                                            similarity_score=rec.get(
+                                                "similarity_score"
+                                            ),
+                                        )
+                                    )
+                                elif doc_id_int in file_docs_dict:
+                                    file_doc = file_docs_dict[doc_id_int]
+                                    recommendations.append(
+                                        RecommendationItemDTO(
+                                            list_id=file_doc.list_id or 0,
+                                            list_title=file_doc.list_title
+                                            or "",
+                                            org_nm=file_doc.org_nm,
+                                            data_type="FILE",
+                                            similarity_score=rec.get(
+                                                "similarity_score"
+                                            ),
+                                        )
+                                    )
+                            except (ValueError, Exception) as e:
+                                logger.warning(
+                                    f"추천 아이템 {rec.get('doc_id')} 변환 실패: {e}"
+                                )
+                                continue
+
+            except asyncio.TimeoutError:
+                logger.warning(f"추천 조회 timeout (5초 초과): {list_id}")
             except Exception as e:
                 logger.warning(f"추천 조회 실패: {e}")
 
         doc_detail_dict["recommendations"] = recommendations
 
         if doc_detail_dict.get("created_at"):
-            doc_detail_dict["created_at"] = doc_detail_dict["created_at"].isoformat()
+            doc_detail_dict["created_at"] = doc_detail_dict[
+                "created_at"
+            ].isoformat()
         if doc_detail_dict.get("updated_at"):
-            doc_detail_dict["updated_at"] = doc_detail_dict["updated_at"].isoformat()
+            doc_detail_dict["updated_at"] = doc_detail_dict[
+                "updated_at"
+            ].isoformat()
         if doc_detail_dict.get("generated_at"):
-            doc_detail_dict["generated_at"] = doc_detail_dict["generated_at"].isoformat()
+            doc_detail_dict["generated_at"] = doc_detail_dict[
+                "generated_at"
+            ].isoformat()
 
         return DocumentDetailDTO(**doc_detail_dict)
 
