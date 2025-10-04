@@ -134,6 +134,9 @@ services:
 volumes:
   es-data:
   mongo-data:
+  milvus-data:
+  etcd-data:
+  minio-data:
 
 networks:
   opendata-network:
