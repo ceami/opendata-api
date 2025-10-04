@@ -78,14 +78,14 @@ async def get_std_doc_detail(
     ),
 ):
     try:
-        doc_detail = await documents_service.get_std_doc_detail(list_id=list_id)
+        doc_detail_dict = await documents_service.get_std_doc_detail(list_id=list_id)
 
         recommendations = []
         if include_recommendations:
             try:
                 rec_results = await recommendation_service.get_recommendations(
                     doc_id=str(list_id),
-                    target_doc_type=doc_detail.data_type,
+                    target_doc_type=doc_detail_dict["data_type"],
                     top_k=4,
                     use_cache=True,
                 )
@@ -134,9 +134,18 @@ async def get_std_doc_detail(
             except Exception as e:
                 logger.warning(f"추천 조회 실패: {e}")
 
-        doc_detail.recommendations = recommendations
+        # dict를 DocumentDetailDTO로 변환
+        doc_detail_dict["recommendations"] = recommendations
+        
+        # datetime 객체를 문자열로 변환
+        if doc_detail_dict.get("created_at"):
+            doc_detail_dict["created_at"] = doc_detail_dict["created_at"].isoformat()
+        if doc_detail_dict.get("updated_at"):
+            doc_detail_dict["updated_at"] = doc_detail_dict["updated_at"].isoformat()
+        if doc_detail_dict.get("generated_at"):
+            doc_detail_dict["generated_at"] = doc_detail_dict["generated_at"].isoformat()
 
-        return doc_detail
+        return DocumentDetailDTO(**doc_detail_dict)
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
