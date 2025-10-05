@@ -12,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import numpy as np
 from pymilvus import MilvusClient
+from pymongo import MongoClient
+from tqdm import tqdm
 
 from core.settings import get_settings
 from db.mongo import MongoDB
-from models import DocRecommendation, RecommendationItem
+from models import DocRecommendation
+from models.open_data import RecommendationItem
 
 
 def recommend_similar_documents(
@@ -48,7 +51,6 @@ def recommend_similar_documents(
         )
 
         recommendations = []
-        print(f"\n--- 추천 기준 문서: {target_doc_id} ---")
         
         for hit in results[0]:
             doc_id = hit.get("doc_id")
@@ -64,7 +66,6 @@ def recommend_similar_documents(
                 if len(recommendations) >= top_k:
                     break
 
-        print(f"{len(recommendations)}개 문서 추천 완료")
         return recommendations
 
     except Exception as e:
@@ -75,8 +76,7 @@ def recommend_similar_documents(
 async def store_recommendations_in_mongo(
     target_doc_id: str,
     target_doc_type: str,
-    recommendations: list[dict[str, Any]],
-    ttl_days: int = 7
+    recommendations: list[dict[str, Any]]
 ) -> bool:
     """추천 결과를 MongoDB에 저장"""
     try:
@@ -95,15 +95,12 @@ async def store_recommendations_in_mongo(
         )
 
         now = datetime.utcnow()
-        expires_at = now + timedelta(days=ttl_days)
 
         if existing_rec:
             existing_rec.recommendations = recommendation_items
             existing_rec.updated_at = now
-            existing_rec.expires_at = expires_at
             existing_rec.version += 1
             await existing_rec.save()
-            print(f"추천 결과 업데이트 완료: {target_doc_id}")
         else:
             new_rec = DocRecommendation(
                 target_doc_id=target_doc_id,
@@ -111,11 +108,9 @@ async def store_recommendations_in_mongo(
                 recommendations=recommendation_items,
                 created_at=now,
                 updated_at=now,
-                expires_at=expires_at,
                 version=1
             )
             await new_rec.save()
-            print(f"추천 결과 저장 완료: {target_doc_id}")
 
         return True
 
@@ -131,8 +126,7 @@ async def recommend_and_store_in_mongo(
     target_doc_id: str,
     target_doc_type: str = "API",
     top_k: int = 4,
-    threshold: float = 0.6,
-    ttl_days: int = 7
+    threshold: float = 0.6
 ) -> list[dict[str, Any]]:
     """문서 추천을 수행하고 결과를 MongoDB에 저장"""
     recommendations = recommend_similar_documents(
@@ -141,7 +135,7 @@ async def recommend_and_store_in_mongo(
 
     if recommendations:
         await store_recommendations_in_mongo(
-            target_doc_id, target_doc_type, recommendations, ttl_days
+            target_doc_id, target_doc_type, recommendations
         )
 
     return recommendations
@@ -153,10 +147,8 @@ async def get_stored_recommendations(
 ) -> list[dict[str, Any]] | None:
     """MongoDB에서 저장된 추천 결과를 조회"""
     try:
-        now = datetime.utcnow()
         result = await DocRecommendation.find_one(
-            DocRecommendation.target_doc_id == target_doc_id,
-            DocRecommendation.expires_at > now
+            DocRecommendation.target_doc_id == target_doc_id
         )
 
         if result:
@@ -169,10 +161,8 @@ async def get_stored_recommendations(
                     "rank": item.rank
                 })
 
-            print(f"저장된 추천 결과 조회 완료: {target_doc_id} ({len(recommendations)}개)")
             return recommendations
         else:
-            print(f"저장된 추천 결과 없음 또는 만료됨: {target_doc_id}")
             return None
 
     except Exception as e:
@@ -180,42 +170,97 @@ async def get_stored_recommendations(
         return None
 
 
+def get_all_documents():
+    """모든 문서 데이터를 가져오는 함수"""
+    settings = get_settings()
+    client = MongoClient(settings.MONGO_URL)
+
+    db = client["open_data"]
+    api_collection = db["open_api_info"]
+    file_collection = db["open_file_info"]
+
+    api_data = list(api_collection.find({}, {"_id": 0}))
+    file_data = list(file_collection.find({}, {"_id": 0}))
+    processed_data = []
+
+    for item in file_data:
+        processed_data.append({
+            "_id": str(item.get("list_id", "")),
+            "list_title": item.get("list_title", ""),
+            "desc": item.get("desc", ""),
+            "keywords": item.get("keywords", []),
+            "doc_type": "FILE",
+        })
+
+    for item in api_data:
+        processed_data.append({
+            "_id": str(item.get("list_id", "")),
+            "list_title": item.get("list_title", ""),
+            "desc": item.get("desc", ""),
+            "keywords": item.get("keywords", []),
+            "doc_type": "API",
+        })
+
+    return processed_data
+
+
 async def main():
-    """테스트용 메인 함수"""
+    """모든 문서에 대해 추천 아이템을 생성하고 저장하는 메인 함수"""
     settings = get_settings()
     await MongoDB.init(settings.MONGO_URL, settings.MONGO_DB)
-    
+
     client = MilvusClient(uri=get_settings().MILVUS_URL)
     collection_name = "recommendation_db"
+
+    all_documents = get_all_documents()
     
-    target_doc_id = "15000017"
-    target_doc_type = "API"
+    successful_count = 0
+    failed_count = 0
+
+    print("\n=== 모든 문서에 대한 추천 생성 시작 ===")
+    print(f"총 {len(all_documents)}개 문서 처리 예정")
 
     try:
-        result = client.query(
-            collection_name=collection_name,
-            filter=f'doc_id == "{target_doc_id}"',
-            output_fields=["vector"]
-        )
+        for doc in tqdm(all_documents, desc="문서 추천 생성 중"):
+            doc_id = doc["_id"]
+            doc_type = doc["doc_type"]
 
-        if result:
-            target_embedding = np.array(result[0]["vector"])
-            recommendations = recommend_similar_documents(
-                client, collection_name, target_embedding, target_doc_id
-            )
-
-            if recommendations:
-                await store_recommendations_in_mongo(
-                    target_doc_id, target_doc_type, recommendations
+            try:
+                result = client.query(
+                    collection_name=collection_name,
+                    filter=f'doc_id == "{doc_id}"',
+                    output_fields=["vector"]
                 )
 
-            stored_recommendations = await get_stored_recommendations(target_doc_id)
-            print("저장된 추천 결과:", stored_recommendations)
-        else:
-            print(f"문서 '{target_doc_id}'를 찾을 수 없습니다.")
+                if result and len(result) > 0:
+                    target_embedding = np.array(result[0]["vector"])
+
+                    recommendations = recommend_similar_documents(
+                        client, collection_name, target_embedding, doc_id
+                    )
+
+                    if recommendations:
+                        await store_recommendations_in_mongo(
+                            doc_id, doc_type, recommendations
+                        )
+                        successful_count += 1
+                        
+                else:
+                    failed_count += 1
+                    
+            except Exception:
+                failed_count += 1
+                continue
+
+        print("\n=== 추천 생성 완료 ===")
+        print(f"성공: {successful_count}개")
+        print(f"실패: {failed_count}개")
+        print(f"총 처리: {successful_count + failed_count}개")
 
     except Exception as e:
-        print(f"오류 발생: {e}")
+        print(f"전체 프로세스 오류 발생: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

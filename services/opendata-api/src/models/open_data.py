@@ -422,7 +422,6 @@ class DocRecommendation(Document):
     recommendations: list[RecommendationItem]
     created_at: datetime
     updated_at: datetime
-    expires_at: datetime
     version: int = 1
     
     class Settings:
@@ -430,9 +429,6 @@ class DocRecommendation(Document):
         indexes = [
             [
                 ("target_doc_id", pymongo.ASCENDING),
-            ],
-            [
-                ("expires_at", pymongo.ASCENDING),
             ],
             [
                 ("created_at", pymongo.ASCENDING),
