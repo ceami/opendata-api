@@ -14,7 +14,7 @@
 from typing import Any
 
 import numpy as np
-from pymilvus import Collection
+from pymilvus import Collection, MilvusClient
 
 
 def get_vector_by_doc_id(collection: Collection, doc_id: str) -> dict | None:
@@ -35,16 +35,15 @@ def get_vector_by_doc_id(collection: Collection, doc_id: str) -> dict | None:
         raise
 
 
-def update_vector_by_doc_id(collection: Collection, doc_id: str, new_embedding: np.ndarray) -> bool:
+def update_vector_by_doc_id(
+    collection: Collection, doc_id: str, new_embedding: np.ndarray
+) -> bool:
     """특정 문서의 임베딩 벡터를 업데이트"""
     try:
         collection.delete(f'doc_id == "{doc_id}"')
         print(f"문서 '{doc_id}' 기존 데이터 삭제 완료")
 
-        entities = [
-            [doc_id],
-            [new_embedding.tolist()]
-        ]
+        entities = [[doc_id], [new_embedding.tolist()]]
         collection.insert(entities)
         collection.flush()
 
@@ -82,7 +81,7 @@ def batch_delete_vectors(collection: Collection, doc_ids: list[str]) -> int:
             print("삭제할 문서 ID가 없습니다")
             return 0
 
-        expr = f'doc_id in {doc_ids}'
+        expr = f"doc_id in {doc_ids}"
         collection.delete(expr)
         collection.flush()
 
@@ -94,13 +93,33 @@ def batch_delete_vectors(collection: Collection, doc_ids: list[str]) -> int:
         return 0
 
 
-def get_collection_stats(collection: Collection) -> dict[str, Any]:
+def get_collection_stats(
+    collection: Collection, milvus_client: MilvusClient | None = None
+) -> dict[str, Any]:
     """컬렉션의 통계 정보를 조회"""
     try:
-        stats = collection.get_stats()
+        if milvus_client:
+            detailed_stats = milvus_client.get_collection_stats(
+                collection_name=collection.name
+            )
+            stats = {
+                "name": collection.name,
+                "description": collection.description,
+                "num_entities": collection.num_entities,
+                "schema": collection.schema,
+                "detailed_stats": detailed_stats,
+            }
+        else:
+            stats = {
+                "name": collection.name,
+                "description": collection.description,
+                "num_entities": collection.num_entities,
+                "schema": collection.schema,
+            }
+
         print("컬렉션 통계 조회 완료")
         return stats
-        
+
     except Exception as e:
         print(f"통계 조회 실패: {e}")
         return {}

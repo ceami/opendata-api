@@ -14,11 +14,10 @@
 from typing import Any
 
 import numpy as np
-from tqdm import tqdm
-
-from pymongo import MongoClient
 from pymilvus import DataType, MilvusClient
+from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer
+from tqdm import tqdm
 
 from core.settings import get_settings
 
@@ -36,10 +35,17 @@ def init_milvus_collection(col_name: str, dim: int) -> MilvusClient:
         schema = client.create_schema(
             auto_id=False,
             enable_dynamic_field=True,
-            description="문서 임베딩 컬렉션"
+            description="문서 임베딩 컬렉션",
         )
-        schema.add_field(field_name="doc_id", datatype=DataType.VARCHAR, is_primary=True, max_length=64)
-        schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=dim)
+        schema.add_field(
+            field_name="doc_id",
+            datatype=DataType.VARCHAR,
+            is_primary=True,
+            max_length=64,
+        )
+        schema.add_field(
+            field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=dim
+        )
 
         client.create_collection(collection_name=col_name, schema=schema)
         print(f"컬렉션 '{col_name}' 생성 완료")
@@ -47,9 +53,9 @@ def init_milvus_collection(col_name: str, dim: int) -> MilvusClient:
         index_params = MilvusClient.prepare_index_params()
         index_params.add_index(
             field_name="vector",
-            index_type="IVF_FLAT", 
-            metric_type="COSINE", 
-            params={"nlist": 128}
+            index_type="IVF_FLAT",
+            metric_type="COSINE",
+            params={"nlist": 128},
         )
 
         client.create_index(collection_name=col_name, index_params=index_params)
@@ -65,14 +71,14 @@ def init_milvus_collection(col_name: str, dim: int) -> MilvusClient:
 
 
 def insert_vectors_milvus_batch(
-    client: MilvusClient, 
-    collection_name: str, 
-    dataset: list[dict], 
-    batch_size: int = 100
+    client: MilvusClient,
+    collection_name: str,
+    dataset: list[dict],
+    batch_size: int = 100,
 ) -> None:
     """문서 ID와 임베딩 벡터를 Milvus에 삽입"""
     try:
-        MODEL_NAME = 'snunlp/KR-SBERT-V40K-klueNLI-augSTS'
+        MODEL_NAME = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
         model = SentenceTransformer(MODEL_NAME)
         print(f"SBERT 모델 로드 완료: {MODEL_NAME}")
 
@@ -83,14 +89,16 @@ def insert_vectors_milvus_batch(
 
         for i in tqdm(range(0, len(dataset)), desc="문서 처리"):
             doc = dataset[i]
-            batch.append({
-                "doc_id": doc["_id"],
-                "list_title": doc.get("list_title", ""),
-                "desc": doc.get("desc", ""),
-                "keywords": " ".join(doc.get("keywords", [])),
-                "doc_type": doc.get("doc_type", "API"),
-                "embedding_text": create_embedding_text(doc)
-            })
+            batch.append(
+                {
+                    "doc_id": doc["_id"],
+                    "list_title": doc.get("list_title", ""),
+                    "desc": doc.get("desc", ""),
+                    "keywords": " ".join(doc.get("keywords", [])),
+                    "doc_type": doc.get("doc_type", "API"),
+                    "embedding_text": create_embedding_text(doc),
+                }
+            )
 
             if len(batch) % batch_size == 0 or i == len(dataset) - 1:
                 embedding_texts = [item["embedding_text"] for item in batch]
@@ -100,7 +108,11 @@ def insert_vectors_milvus_batch(
                     item["vector"] = emb.tolist()
 
                 data = [
-                    {"doc_id": item["doc_id"], "vector": item["vector"], "doc_type": item.get("doc_type", "API")} 
+                    {
+                        "doc_id": item["doc_id"],
+                        "vector": item["vector"],
+                        "doc_type": item.get("doc_type", "API"),
+                    }
                     for item in batch
                 ]
 
@@ -118,7 +130,12 @@ def insert_vectors_milvus_batch(
         raise
 
 
-def insert_vectors_milvus(client: MilvusClient, collection_name: str, doc_ids: list[str], embeddings: np.ndarray) -> Any:
+def insert_vectors_milvus(
+    client: MilvusClient,
+    collection_name: str,
+    doc_ids: list[str],
+    embeddings: np.ndarray,
+) -> Any:
     """문서 ID와 임베딩 벡터를 Milvus에 삽입"""
     try:
         data = [
@@ -139,9 +156,9 @@ def insert_vectors_milvus(client: MilvusClient, collection_name: str, doc_ids: l
 def create_embedding_text(doc: dict) -> str:
     """문서의 핵심 필드를 결합하여 임베딩용 텍스트를 생성"""
 
-    title = doc.get('list_title', '')
-    desc = doc.get('desc', '')
-    keywords = ' '.join(doc.get('keywords', []))
+    title = doc.get("list_title", "")
+    desc = doc.get("desc", "")
+    keywords = " ".join(doc.get("keywords", []))
 
     embedding_text = f"{title}. {desc}. 핵심키워드: {keywords}"
     return embedding_text
@@ -153,10 +170,7 @@ def emb_texts(model: SentenceTransformer, texts: list[str]) -> np.ndarray:
         print(f"{len(texts)}개 텍스트 임베딩 생성 중...")
 
         res = model.encode(
-            texts, 
-            convert_to_numpy=True,
-            show_progress_bar=True,
-            batch_size=32
+            texts, convert_to_numpy=True, show_progress_bar=True, batch_size=32
         )
 
         print(f"임베딩 생성 완료. Shape: {res.shape}")
@@ -166,11 +180,15 @@ def emb_texts(model: SentenceTransformer, texts: list[str]) -> np.ndarray:
         raise
 
 
-def validate_embeddings(embeddings: np.ndarray, sample_data: list[dict]) -> None:
+def validate_embeddings(
+    embeddings: np.ndarray, sample_data: list[dict]
+) -> None:
     """임베딩 결과를 검증"""
     print("\n=== 임베딩 검증 ===")
     print(f"임베딩 개수: {len(embeddings)}")
-    print(f"임베딩 차원: {embeddings.shape[1] if len(embeddings) > 0 else 'N/A'}")
+    print(
+        f"임베딩 차원: {embeddings.shape[1] if len(embeddings) > 0 else 'N/A'}"
+    )
     print(f"데이터 타입: {embeddings.dtype}")
     print(f"최소값: {embeddings.min():.4f}")
     print(f"최대값: {embeddings.max():.4f}")
@@ -178,7 +196,7 @@ def validate_embeddings(embeddings: np.ndarray, sample_data: list[dict]) -> None
 
     for i, doc in enumerate(sample_data):
         embedding_text = create_embedding_text(doc)
-        print(f"\n문서 {i+1}: {doc['_id']}")
+        print(f"\n문서 {i + 1}: {doc['_id']}")
         print(f"임베딩 텍스트: {embedding_text[:100]}...")
         print(f"벡터 크기: {np.linalg.norm(embeddings[i]):.4f}")
 
@@ -196,24 +214,31 @@ def get_data():
     processed_data = []
 
     for item in api_data:
-        processed_data.append({
-            "_id": item.get("list_id", ""),
-            "list_title": item.get("list_title", ""),
-            "desc": item.get("desc", ""),
-            "keywords": item.get("keywords", []),
-            "doc_type": "API",
-        })
+        processed_data.append(
+            {
+                "_id": str(item.get("list_id", "")),
+                "list_title": item.get("list_title", ""),
+                "desc": item.get("desc", ""),
+                "keywords": item.get("keywords", []),
+                "doc_type": "API",
+            }
+        )
 
     for item in file_data:
-        processed_data.append({
-            "_id": item.get("list_id", ""),
-            "list_title": item.get("list_title", ""),
-            "desc": item.get("desc", ""),
-            "keywords": item.get("keywords", []),
-            "doc_type": "FILE",
-        })
+        processed_data.append(
+            {
+                "_id": str(item.get("list_id", "")),
+                "list_title": item.get("list_title", ""),
+                "desc": item.get("desc", ""),
+                "keywords": item.get("keywords", []),
+                "doc_type": "FILE",
+            }
+        )
 
-    print(f"총 {len(processed_data)}개 문서 로드 완료 (API: {len(api_data)}, File: {len(file_data)})")
+    print(
+        f"총 {len(processed_data)}개 문서 로드 완료 "
+        f"(API: {len(api_data)}, File: {len(file_data)})"
+    )
     return processed_data
 
 
@@ -242,12 +267,12 @@ if __name__ == "__main__":
             "list_title": "국민 여가 활동 및 여행 트렌드 데이터",
             "desc": "국민들의 주말 여가 활동 패턴, 여행 형태 변화 등 최신 트렌드를 담고 있습니다. 문화, 관광 분야 연구에 활용됩니다.",
             "keywords": ["여행트렌드", "여가활동", "국민조사"],
-        }
+        },
     ]
     data = get_data()
 
     try:
-        MODEL_NAME = 'snunlp/KR-SBERT-V40K-klueNLI-augSTS'
+        MODEL_NAME = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
         print(f"모델 로드 중: {MODEL_NAME}")
         model = SentenceTransformer(MODEL_NAME)
         print("모델 로드 완료")
@@ -260,14 +285,19 @@ if __name__ == "__main__":
         validate_embeddings(embeddings, data)
 
         print("Milvus 컬렉션 초기화 중...")
-        client = init_milvus_collection("recommendation_db", embeddings.shape[1])
+        client = init_milvus_collection(
+            "recommendation_db", embeddings.shape[1]
+        )
 
         print("배치 방식으로 데이터 삽입 중...")
-        insert_vectors_milvus_batch(client, "recommendation_db", data, batch_size=2)
+        insert_vectors_milvus_batch(
+            client, "recommendation_db", data, batch_size=2
+        )
 
         print("모든 과정 완료!")
 
     except Exception as e:
         print(f"오류 발생: {e}")
         import traceback
+
         traceback.print_exc()

@@ -15,11 +15,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from core.dependencies import (
-    get_logger_service,
-    get_cross_collection_service,
-)
-
+from core.dependencies import get_cross_collection_service, get_logger_service
 
 admin_router = APIRouter(prefix="/document", tags=["admin"])
 
@@ -28,7 +24,9 @@ admin_router = APIRouter(prefix="/document", tags=["admin"])
 async def rebuild_ranked_list(
     request: Request,
     cross_collection_service=Depends(get_cross_collection_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("document_admin")),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_admin")
+    ),
 ):
     try:
         return await cross_collection_service.rebuild_rank_snapshots()

@@ -38,7 +38,11 @@ class SearchProvider:
             base_query = self._build_fuzzy_match_query(query)
 
         if data_type:
-            search_query = {"bool": {"must": [base_query, {"term": {"data_type": data_type}}]}}
+            search_query = {
+                "bool": {
+                    "must": [base_query, {"term": {"data_type": data_type}}]
+                }
+            }
         else:
             search_query = base_query
 
@@ -61,7 +65,7 @@ class SearchProvider:
             search_body["min_score"] = min_score
 
         try:
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             return response["hits"]
         except Exception:
             raise
@@ -70,9 +74,17 @@ class SearchProvider:
         return {
             "bool": {
                 "should": [
-                    {"match_phrase": {"list_title": {"query": query, "boost": 3.0}}},
+                    {
+                        "match_phrase": {
+                            "list_title": {"query": query, "boost": 3.0}
+                        }
+                    },
                     {"match_phrase": {"title": {"query": query, "boost": 2.0}}},
-                    {"match_phrase": {"org_nm": {"query": query, "boost": 1.5}}},
+                    {
+                        "match_phrase": {
+                            "org_nm": {"query": query, "boost": 1.5}
+                        }
+                    },
                 ],
                 "minimum_should_match": 1,
             }
@@ -133,7 +145,9 @@ class SearchProvider:
             should_clauses.append(self._build_weighted_query(query, weight))
 
         search_body = {
-            "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
+            "query": {
+                "bool": {"should": should_clauses, "minimum_should_match": 1}
+            },
             "highlight": {
                 "fields": {
                     "list_title": {},
@@ -148,12 +162,14 @@ class SearchProvider:
         }
 
         try:
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             return response["hits"]
         except Exception:
             raise
 
-    def _build_weighted_query(self, query: str, weight: float) -> dict[str, Any]:
+    def _build_weighted_query(
+        self, query: str, weight: float
+    ) -> dict[str, Any]:
         return {
             "multi_match": {
                 "query": query,
@@ -229,7 +245,7 @@ class SearchProvider:
         }
 
         try:
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             hits = response["hits"]
 
             if hits["total"]["value"] >= size:
@@ -238,7 +254,7 @@ class SearchProvider:
             relaxed_query = self._build_fuzzy_match_query(query)
             search_body["query"] = relaxed_query
 
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             return response["hits"]
 
         except Exception:

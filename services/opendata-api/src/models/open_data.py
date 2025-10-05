@@ -16,7 +16,6 @@ from typing import Any, Literal
 
 import pymongo
 from beanie import Document
-
 from pydantic import BaseModel, Field
 
 
@@ -33,7 +32,7 @@ class ParsedEndpoint(BaseModel):
 class OpenFileInfo(Document):
     """OpenFileInfo 모델"""
 
-    id: str
+    id: str = Field(default_factory=lambda: "")
     core_data_nm: str | None
     cost_unit: str | None
     created_at: datetime | None = None
@@ -95,7 +94,7 @@ class OpenFileInfo(Document):
 class OpenAPIInfo(Document):
     """OpenAPIInfo 모델"""
 
-    id: str
+    id: str = Field(default_factory=lambda: "")
     api_type: str
     category_nm: str
     core_data_nm: str | None
@@ -182,7 +181,7 @@ class OpenAPIInfo(Document):
 class ParsedAPIInfo(Document):
     """OpenDataInfo를 파서를 거쳐서 만들게 되는 최종 생성물"""
 
-    id: str
+    id: str = Field(default_factory=lambda: "")
     api_confirm_for_dev: str
     api_confirm_for_prod: str
     api_type: str
@@ -218,7 +217,7 @@ class ParsedAPIInfo(Document):
 class ParsedFileInfo(Document):
     """OpenFileInfo를 파서를 거쳐서 만들게 되는 최종 생성물"""
 
-    id: str
+    id: str = Field(default_factory=lambda: "")
     api_confirm_for_dev: str | None = None
     api_confirm_for_prod: str | None = None
     api_type: str
@@ -253,7 +252,7 @@ class ParsedFileInfo(Document):
 class APIStdDocument(Document):
     """API 표준 문서 모델"""
 
-    id: str
+    id: str = Field(default_factory=lambda: "")
     list_id: int
     detail_url: str
     markdown: str
@@ -392,11 +391,11 @@ class RankTrending(RankBase):
 
 class RankMetadata(Document):
     """랭크 스냅샷 메타데이터"""
-    
+
     sort_type: str
     total_count: int
     last_updated: datetime
-    
+
     class Settings:
         name = "rank_metadata"
         indexes = [
@@ -408,6 +407,7 @@ class RankMetadata(Document):
 
 class RecommendationItem(BaseModel):
     """추천 아이템 모델"""
+
     doc_id: str
     doc_type: str
     similarity_score: float
@@ -416,14 +416,14 @@ class RecommendationItem(BaseModel):
 
 class DocRecommendation(Document):
     """문서 추천 모델"""
-    
+
     target_doc_id: str
     target_doc_type: str
     recommendations: list[RecommendationItem]
     created_at: datetime
     updated_at: datetime
     version: int = 1
-    
+
     class Settings:
         name = "doc_recommendations"
         indexes = [

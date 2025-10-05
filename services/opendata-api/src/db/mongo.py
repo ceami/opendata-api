@@ -15,22 +15,22 @@ from beanie import init_beanie
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from models import (
+    DocRecommendation,
     GeneratedAPIDocs,
     GeneratedFileDocs,
     OpenAPIInfo,
     OpenFileInfo,
     RankLatest,
+    RankMetadata,
     RankPopular,
     RankTrending,
-    RankMetadata,
     SavedRequest,
-    DocRecommendation,
 )
 
 
 class MongoDB:
-    _client: AsyncIOMotorClient = None
-    _database: AsyncIOMotorDatabase = None
+    _client: AsyncIOMotorClient | None = None
+    _database: AsyncIOMotorDatabase | None = None
 
     @classmethod
     async def init(cls, mongo_uri: str, database_name: str):
@@ -55,17 +55,13 @@ class MongoDB:
     @classmethod
     def get_db(cls) -> AsyncIOMotorDatabase:
         if cls._database is None:
-            raise RuntimeError(
-                "MongoDB가 초기화되지 않았습니다."
-            )
+            raise RuntimeError("MongoDB가 초기화되지 않았습니다.")
         return cls._database
 
     @classmethod
     def get_client(cls) -> AsyncIOMotorClient:
         if cls._client is None:
-            raise RuntimeError(
-                "MongoDB가 초기화되지 않았습니다."
-            )
+            raise RuntimeError("MongoDB가 초기화되지 않았습니다.")
         return cls._client
 
     @classmethod
