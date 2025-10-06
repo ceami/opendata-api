@@ -63,7 +63,7 @@ services:
     restart: always
 
   milvus:
-    image: milvusdb/milvus:v2.4.4
+    image: milvusdb/milvus:v2.6.2
     container_name: opendata-milvus
     restart: unless-stopped
     command: ["milvus", "run", "standalone"]
@@ -74,51 +74,53 @@ services:
       - "19530:19530"
       - "9091:9091"
     volumes:
-      - milvus-data:/var/lib/milvus
+      - milvus-data/volumes/milvus:/var/lib/milvus
     depends_on:
-      - etcd
-      - minio
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      start_period: 90s
     env_file:
       - .env.${ENV}
     networks:
       - opendata-network
 
   etcd:
-    image: quay.io/coreos/etcd:v3.5.13
+    image: quay.io/coreos/etcd:v3.5.18
     container_name: opendata-etcd
     restart: unless-stopped
-    expose:
-      - 2379
-      - 2380
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     ports:
       - "2379:2379"
       - "2380:2380"
     volumes:
-      - etcd-data:/etcd
+      - etcd-data/volumes/etcd:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
     env_file:
       - .env.${ENV}
     networks:
       - opendata-network
 
   minio:
-    image: minio/minio:RELEASE.2024-05-10T01-41-38Z
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     container_name: opendata-minio
     restart: unless-stopped
-    command: server /data --console-address ":9001"
-    expose:
-      - 9000
-      - 9001
+    command: minio server /minio_data --console-address ":9001"
     ports:
-      - "9000:9000"
       - "9001:9001"
+      - "9000:9000"
     volumes:
-      - minio-data:/data
+      - minio-data/volumes/minio:/minio_data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
