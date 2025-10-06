@@ -59,7 +59,8 @@ class RecommendationService:
                 DocRecommendation.expires_at > now,
             )
 
-            if result and result.recommendations:
+            if result:
+                # result.recommendations가 빈 배열이어도 캐시된 것으로 처리
                 recommendations = []
                 for item in result.recommendations[:top_k]:
                     recommendations.append(
