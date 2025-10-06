@@ -74,7 +74,7 @@ services:
       - "19530:19530"
       - "9091:9091"
     volumes:
-      - milvus-data/volumes/milvus:/var/lib/milvus
+      - milvus-data:/var/lib/milvus
     depends_on:
       etcd:
         condition: service_healthy
@@ -100,7 +100,7 @@ services:
       - "2379:2379"
       - "2380:2380"
     volumes:
-      - etcd-data/volumes/etcd:/etcd
+      - etcd-data:/etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 30s
@@ -120,7 +120,7 @@ services:
       - "9001:9001"
       - "9000:9000"
     volumes:
-      - minio-data/volumes/minio:/minio_data
+      - minio-data:/minio_data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
