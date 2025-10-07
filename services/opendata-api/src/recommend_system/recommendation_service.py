@@ -53,14 +53,11 @@ class RecommendationService:
     ) -> list[dict[str, Any]] | None:
         """MongoDB 캐시에서 추천 결과 조회"""
         try:
-            now = datetime.utcnow()
             result = await DocRecommendation.find_one(
                 DocRecommendation.target_doc_id == doc_id,
-                DocRecommendation.expires_at > now,
             )
 
             if result:
-                # result.recommendations가 빈 배열이어도 캐시된 것으로 처리
                 recommendations = []
                 for item in result.recommendations[:top_k]:
                     recommendations.append(

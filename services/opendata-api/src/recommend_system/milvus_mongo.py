@@ -42,7 +42,7 @@ def recommend_similar_documents(
             data=[target_embedding.tolist()],
             anns_field="vector",
             search_params=search_params,
-            limit=top_k + 1,
+            limit=top_k + 5,
             output_fields=["doc_id", "doc_type"],
         )
 
@@ -50,19 +50,23 @@ def recommend_similar_documents(
 
         for hit in results[0]:
             doc_id = hit.get("doc_id")
-            score = hit.get("distance", 0)
+            distance = hit.get("distance", 0)
+            similarity = float(distance)
 
-            if doc_id != target_doc_id and score >= threshold:
+            if doc_id != target_doc_id and similarity >= threshold:
                 recommendations.append(
                     {
                         "doc_id": doc_id,
                         "doc_type": hit.get("doc_type", "API"),
-                        "similarity_score": float(score),
+                        "similarity_score": float(similarity),
                     }
                 )
 
-                if len(recommendations) >= top_k:
-                    break
+        recommendations = sorted(
+            recommendations,
+            key=lambda x: x["similarity_score"],
+            reverse=True,
+        )[:top_k]
 
         return recommendations
 
@@ -115,63 +119,6 @@ async def store_recommendations_in_mongo(
     except Exception as e:
         print(f"MongoDB 저장 실패: {e}")
         return False
-
-
-async def recommend_and_store_in_mongo(
-    client: MilvusClient,
-    milvus_collection_name: str,
-    target_embedding: np.ndarray,
-    target_doc_id: str,
-    target_doc_type: str = "API",
-    top_k: int = 4,
-    threshold: float = 0.6,
-) -> list[dict[str, Any]]:
-    """문서 추천을 수행하고 결과를 MongoDB에 저장"""
-    recommendations = recommend_similar_documents(
-        client,
-        milvus_collection_name,
-        target_embedding,
-        target_doc_id,
-        top_k,
-        threshold,
-    )
-
-    if recommendations:
-        await store_recommendations_in_mongo(
-            target_doc_id, target_doc_type, recommendations
-        )
-
-    return recommendations
-
-
-async def get_stored_recommendations(
-    target_doc_id: str, top_k: int = 4
-) -> list[dict[str, Any]] | None:
-    """MongoDB에서 저장된 추천 결과를 조회"""
-    try:
-        result = await DocRecommendation.find_one(
-            DocRecommendation.target_doc_id == target_doc_id
-        )
-
-        if result:
-            recommendations = []
-            for item in result.recommendations[:top_k]:
-                recommendations.append(
-                    {
-                        "doc_id": item.doc_id,
-                        "doc_type": item.doc_type,
-                        "similarity_score": item.similarity_score,
-                        "rank": item.rank,
-                    }
-                )
-
-            return recommendations
-        else:
-            return None
-
-    except Exception as e:
-        print(f"추천 결과 조회 실패: {e}")
-        return None
 
 
 async def get_all_documents():
@@ -234,15 +181,14 @@ async def main():
             doc_type = doc["doc_type"]
 
             try:
-                # doc_id가 정수일 경우 따옴표 없이, 문자열일 경우 따옴표 사용
-                filter_expr = f'doc_id == {doc_id}' if isinstance(doc_id, int) else f'doc_id == "{doc_id}"'
+                filter_expr = f'doc_id == "{str(doc_id)}"'
                 result = client.query(
                     collection_name=collection_name,
                     filter=filter_expr,
                     output_fields=["vector"],
                 )
 
-                if result and len(result) > 0:
+                if result and len(result) > 0 and result[0]["vector"]:
                     target_embedding = np.array(result[0]["vector"])
 
                     recommendations = recommend_similar_documents(

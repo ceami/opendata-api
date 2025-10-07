@@ -17,7 +17,6 @@ import numpy as np
 from pymilvus import DataType, MilvusClient
 from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
 
 from core.settings import get_settings
 
@@ -58,9 +57,10 @@ def init_milvus_collection(col_name: str, dim: int) -> MilvusClient:
             params={"nlist": 128},
         )
 
-        client.create_index(collection_name=col_name, index_params=index_params)
-        print("인덱스 생성 완료")
-
+        client.create_index(
+            collection_name=col_name,
+            index_params=index_params,
+        )
         client.load_collection(collection_name=col_name)
         print("컬렉션 로드 완료")
         return client
@@ -70,83 +70,33 @@ def init_milvus_collection(col_name: str, dim: int) -> MilvusClient:
         raise
 
 
-def insert_vectors_milvus_batch(
-    client: MilvusClient,
-    collection_name: str,
-    dataset: list[dict],
-    batch_size: int = 100,
-) -> None:
-    """문서 ID와 임베딩 벡터를 Milvus에 삽입"""
-    try:
-        MODEL_NAME = "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
-        model = SentenceTransformer(MODEL_NAME)
-        print(f"SBERT 모델 로드 완료: {MODEL_NAME}")
-
-        batch = []
-        total_inserted = 0
-
-        print(f"{len(dataset)}개 문서 배치 처리 시작 (배치 크기: {batch_size})")
-
-        for i in tqdm(range(0, len(dataset)), desc="문서 처리"):
-            doc = dataset[i]
-            batch.append(
-                {
-                    "doc_id": doc["_id"],
-                    "list_title": doc.get("list_title", ""),
-                    "desc": doc.get("desc", ""),
-                    "keywords": " ".join(doc.get("keywords", [])),
-                    "doc_type": doc.get("doc_type", "API"),
-                    "embedding_text": create_embedding_text(doc),
-                }
-            )
-
-            if len(batch) % batch_size == 0 or i == len(dataset) - 1:
-                embedding_texts = [item["embedding_text"] for item in batch]
-                embeddings = emb_texts(model, embedding_texts)
-
-                for item, emb in zip(batch, embeddings):
-                    item["vector"] = emb.tolist()
-
-                data = [
-                    {
-                        "doc_id": item["doc_id"],
-                        "vector": item["vector"],
-                        "doc_type": item.get("doc_type", "API"),
-                    }
-                    for item in batch
-                ]
-
-                client.insert(collection_name=collection_name, data=data)
-                total_inserted += len(batch)
-
-                print(f"배치 삽입 완료: {len(batch)}개 (총 {total_inserted}개)")
-                batch = []
-
-        client.flush(collection_name=collection_name)
-        print(f"모든 데이터 삽입 완료! 총 {total_inserted}개 문서")
-
-    except Exception as e:
-        print(f"배치 삽입 실패: {e}")
-        raise
-
-
 def insert_vectors_milvus(
     client: MilvusClient,
     collection_name: str,
     doc_ids: list[str],
     embeddings: np.ndarray,
+    batch_size: int = 50,
 ) -> Any:
-    """문서 ID와 임베딩 벡터를 Milvus에 삽입"""
+    """문서 ID와 임베딩 벡터를 Milvus에 배치로 삽입"""
     try:
-        data = [
-            {"doc_id": doc_id, "vector": vec.tolist()}
-            for doc_id, vec in zip(doc_ids, embeddings)
-        ]
-        result = client.insert(collection_name=collection_name, data=data)
-        print(f"{len(doc_ids)}개 문서 임베딩 삽입 완료")
+        total_inserted = 0
+
+        for i in range(0, len(doc_ids), batch_size):
+            batch_ids = doc_ids[i:i + batch_size]
+            batch_embeddings = embeddings[i:i + batch_size]
+
+            data = [
+                {"doc_id": doc_id, "vector": vec.tolist()}
+                for doc_id, vec in zip(batch_ids, batch_embeddings)
+            ]
+
+            client.insert(collection_name=collection_name, data=data)
+            total_inserted += len(data)
+            print(f"배치 삽입 완료: {len(data)}개 (총 {total_inserted}개)")
+
         client.flush(collection_name=collection_name)
-        print("데이터 플러시 완료")
-        return result
+        print(f"모든 데이터 삽입 완료! 총 {total_inserted}개 문서")
+        return total_inserted
 
     except Exception as e:
         print(f"벡터 삽입 실패: {e}")
@@ -159,46 +109,24 @@ def create_embedding_text(doc: dict) -> str:
     title = doc.get("list_title", "")
     desc = doc.get("desc", "")
     keywords = " ".join(doc.get("keywords", []))
+    org_nm = doc.get("org_nm", "")
+    category_nm = doc.get("new_category_nm", "")
 
-    embedding_text = f"{title}. {desc}. 핵심키워드: {keywords}"
+    embedding_text = f"{title}. {desc}. 핵심키워드: {keywords}. 기관: {org_nm}. 카테고리: {category_nm}"
+
     return embedding_text
 
 
 def emb_texts(model: SentenceTransformer, texts: list[str]) -> np.ndarray:
     """SentenceTransformer를 사용하여 텍스트 리스트를 임베딩 벡터로 변환"""
     try:
-        print(f"{len(texts)}개 텍스트 임베딩 생성 중...")
-
         res = model.encode(
             texts, convert_to_numpy=True, show_progress_bar=True, batch_size=32
         )
-
-        print(f"임베딩 생성 완료. Shape: {res.shape}")
         return res
     except Exception as e:
         print(f"임베딩 생성 실패: {e}")
         raise
-
-
-def validate_embeddings(
-    embeddings: np.ndarray, sample_data: list[dict]
-) -> None:
-    """임베딩 결과를 검증"""
-    print("\n=== 임베딩 검증 ===")
-    print(f"임베딩 개수: {len(embeddings)}")
-    print(
-        f"임베딩 차원: {embeddings.shape[1] if len(embeddings) > 0 else 'N/A'}"
-    )
-    print(f"데이터 타입: {embeddings.dtype}")
-    print(f"최소값: {embeddings.min():.4f}")
-    print(f"최대값: {embeddings.max():.4f}")
-    print(f"평균값: {embeddings.mean():.4f}")
-
-    for i, doc in enumerate(sample_data):
-        embedding_text = create_embedding_text(doc)
-        print(f"\n문서 {i + 1}: {doc['_id']}")
-        print(f"임베딩 텍스트: {embedding_text[:100]}...")
-        print(f"벡터 크기: {np.linalg.norm(embeddings[i]):.4f}")
 
 
 def get_data():
@@ -206,34 +134,19 @@ def get_data():
     client = MongoClient(settings.MONGO_URL)
 
     db = client["open_data"]
-    api_collection = db["open_api_info"]
-    file_collection = db["open_file_info"]
-
-    api_data = list(api_collection.find({}, {"_id": 0}))
-    file_data = list(file_collection.find({}, {"_id": 0}))
+    api_data = list(db["open_api_info"].find({}, {"_id": 0}))
+    file_data = list(db["open_file_info"].find({}, {"_id": 0}))
     processed_data = []
 
-    for item in api_data:
-        processed_data.append(
-            {
+    for src, dtype in [(api_data, "API"), (file_data, "FILE")]:
+        for item in src:
+            processed_data.append({
                 "_id": str(item.get("list_id", "")),
                 "list_title": item.get("list_title", ""),
                 "desc": item.get("desc", ""),
                 "keywords": item.get("keywords", []),
-                "doc_type": "API",
-            }
-        )
-
-    for item in file_data:
-        processed_data.append(
-            {
-                "_id": str(item.get("list_id", "")),
-                "list_title": item.get("list_title", ""),
-                "desc": item.get("desc", ""),
-                "keywords": item.get("keywords", []),
-                "doc_type": "FILE",
-            }
-        )
+                "doc_type": dtype,
+            })
 
     print(
         f"총 {len(processed_data)}개 문서 로드 완료 "
@@ -282,16 +195,18 @@ if __name__ == "__main__":
 
         embeddings = emb_texts(model, embedding_texts)
 
-        validate_embeddings(embeddings, data)
-
         print("Milvus 컬렉션 초기화 중...")
         client = init_milvus_collection(
             "recommendation_db", embeddings.shape[1]
         )
 
-        print("배치 방식으로 데이터 삽입 중...")
-        insert_vectors_milvus_batch(
-            client, "recommendation_db", data, batch_size=2
+        print("임베딩 삽입 중...")
+        insert_vectors_milvus(
+            client,
+            "recommendation_db",
+            [d["_id"] for d in data],
+            embeddings,
+            batch_size=50
         )
 
         print("모든 과정 완료!")
