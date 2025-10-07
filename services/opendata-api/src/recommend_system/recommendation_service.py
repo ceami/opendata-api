@@ -17,7 +17,6 @@ from typing import Any
 
 import numpy as np
 from pymilvus import MilvusClient
-from sentence_transformers import SentenceTransformer
 
 from core.settings import get_settings
 from models import DocRecommendation
@@ -36,8 +35,6 @@ class RecommendationService:
             milvus_uri = get_settings().MILVUS_URL
         self.milvus_client = MilvusClient(uri=milvus_uri)
         self.collection_name = collection_name
-
-        self.model = SentenceTransformer("snunlp/KR-SBERT-V40K-klueNLI-augSTS")
 
     def _create_embedding_text(self, doc: dict) -> str:
         """문서의 핵심 필드를 결합하여 임베딩용 텍스트를 생성"""
