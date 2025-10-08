@@ -15,6 +15,7 @@ from beanie import init_beanie
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from models import (
+    Comment,
     DocRecommendation,
     GeneratedAPIDocs,
     GeneratedFileDocs,
@@ -39,6 +40,7 @@ class MongoDB:
         await init_beanie(
             database=cls._database,
             document_models=[
+                Comment,
                 OpenAPIInfo,
                 OpenFileInfo,
                 GeneratedFileDocs,
