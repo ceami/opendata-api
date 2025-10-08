@@ -164,7 +164,7 @@ async def main():
     settings = get_settings()
     await MongoDB.init(settings.MONGO_URL, settings.MONGO_DB)
 
-    client = MilvusClient(uri=get_settings().MILVUS_URL)
+    client = MilvusClient(uri=settings.MILVUS_URL)
     collection_name = "recommendation_db"
 
     all_documents = await get_all_documents()
