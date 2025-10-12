@@ -90,6 +90,10 @@ async def get_list(
                     detail=f"페이지 번호가 범위를 초과했습니다. (요청: {page}, 최대: {total_pages})",
                 )
 
+            for item in items_data:
+                if item.get("list_title"):
+                    item["list_title"] = item["list_title"].replace("_", " ")
+
             dto_result = PaginatedUnifiedDataDTO(
                 items=[UnifiedDataItemDTO(**item) for item in items_data],
                 total=total,
@@ -164,10 +168,14 @@ async def get_list(
                     format_datetime(generated_at) if generated_at else None
                 )
 
+                list_title = item.list_title or item.title
+                if list_title:
+                    list_title = list_title.replace("_", " ")
+
                 formatted_items.append(
                     {
                         "list_id": list_id,
-                        "list_title": item.list_title or item.title,
+                        "list_title": list_title,
                         "org_nm": item.org_nm or item.department,
                         "token_count": item.token_count,
                         "has_generated_doc": item.has_generated_doc,
@@ -190,10 +198,14 @@ async def get_list(
 
         formatted_items = []
         for item in rank_result["data"]:
+            list_title = item.get("list_title", "")
+            if list_title:
+                list_title = list_title.replace("_", " ")
+
             formatted_items.append(
                 {
                     "list_id": item.get("list_id"),
-                    "list_title": item.get("list_title", ""),
+                    "list_title": list_title,
                     "org_nm": item.get("org_nm"),
                     "token_count": item.get("token_count", 0),
                     "has_generated_doc": item.get("has_generated_doc", False),
