@@ -1,3 +1,16 @@
+# Copyright 2025 Team Aeris
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 [project]
 name = "open-data-mcp-api"
 version = "0.0.1"
@@ -21,9 +34,14 @@ dependencies = [
     "gunicorn>=23.0.0",
     "loguru>=0.7.3",
     "motor>=3.7.1",
-    "pydantic-settings>=2.10.1",
+    "numpy>=2.2.6",
+    "pydantic-settings[toml]>=2.10.1",
+    "pymilvus>=2.6.2",
     "pymongo>=4.13.2",
+    "sentence-transformers>=5.1.1",
     "slowapi>=0.1.9",
+    "tomli>=2.0.0",
+    "tqdm>=4.67.1",
     "uvicorn>=0.35.0",
 ]
 

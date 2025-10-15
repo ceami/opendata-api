@@ -14,7 +14,10 @@
 from dataclasses import asdict
 from typing import Any
 
-from api.v1.application.open_data.dto import PaginatedUnifiedDataDTO, UnifiedDataItemDTO
+from api.v1.application.open_data.dto import (
+    PaginatedUnifiedDataDTO,
+    UnifiedDataItemDTO,
+)
 from models import GeneratedAPIDocs, GeneratedFileDocs
 from utils.datetime_util import format_datetime
 
@@ -57,7 +60,9 @@ class PaginationAppService:
             for item in result["data"]:
                 list_id = item.get("list_id")
                 data_type = item.get("data_type", "API")
-                generated_at = await fetch_generated_at(list_id=list_id, data_type=data_type)
+                generated_at = await fetch_generated_at(
+                    list_id=list_id, data_type=data_type
+                )
 
                 items.append(
                     {
@@ -65,7 +70,9 @@ class PaginationAppService:
                         "list_title": item.get("list_title", ""),
                         "org_nm": item.get("org_nm"),
                         "token_count": item.get("token_count", 0),
-                        "has_generated_doc": item.get("has_generated_doc", False),
+                        "has_generated_doc": item.get(
+                            "has_generated_doc", False
+                        ),
                         "updated_at": generated_at,
                         "data_type": data_type,
                         "score": None,
@@ -101,7 +108,9 @@ class PaginationAppService:
             "size": rank_result["size"],
         }
 
-    async def get_unified_data_paginated(self, **kwargs) -> PaginatedUnifiedDataDTO:
+    async def get_unified_data_paginated(
+        self, **kwargs
+    ) -> PaginatedUnifiedDataDTO:
         """통합 데이터 페이지네이션 조회"""
         result = await self._svc.get_unified_data_paginated(**kwargs)
         items = []
@@ -115,7 +124,7 @@ class PaginationAppService:
         total_pages = (total + size - 1) // size if size > 0 else 0
         has_next = page < total_pages
         has_prev = page > 1
-        
+
         return PaginatedUnifiedDataDTO(
             items=items,
             total=total,
@@ -163,11 +172,15 @@ class PaginationAppService:
 
                 generated_at = None
                 if data_type == "API":
-                    api_doc = await GeneratedAPIDocs.find_one({"list_id": list_id})
+                    api_doc = await GeneratedAPIDocs.find_one(
+                        {"list_id": list_id}
+                    )
                     if api_doc:
                         generated_at = getattr(api_doc, "generated_at", None)
                 else:
-                    file_doc = await GeneratedFileDocs.find_one({"list_id": list_id})
+                    file_doc = await GeneratedFileDocs.find_one(
+                        {"list_id": list_id}
+                    )
                     if file_doc:
                         generated_at = getattr(file_doc, "generated_at", None)
 
@@ -177,7 +190,9 @@ class PaginationAppService:
                         "list_title": item.get("list_title", ""),
                         "org_nm": item.get("org_nm"),
                         "token_count": item.get("token_count", 0),
-                        "has_generated_doc": item.get("has_generated_doc", False),
+                        "has_generated_doc": item.get(
+                            "has_generated_doc", False
+                        ),
                         "updated_at": format_datetime(generated_at),
                         "data_type": data_type,
                         "score": None,

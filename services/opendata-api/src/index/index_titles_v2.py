@@ -13,7 +13,7 @@
 # limitations under the License.
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from elasticsearch import Elasticsearch
 
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 class TitleIndexer:
     def __init__(
         self,
-        mongo_uri: str = None,
-        es_hosts: List[str] = None,
+        mongo_uri: str | None = None,
+        es_hosts: list[str] | None = None,
     ):
         settings = get_settings()
         if mongo_uri is None:
@@ -37,7 +37,7 @@ class TitleIndexer:
             es_hosts = [settings.ELASTICSEARCH_URL]
 
         self.mongo_uri = mongo_uri
-        self.es = Elasticsearch(es_hosts)
+        self.es = Elasticsearch(hosts=es_hosts)
         self.index_name = settings.ELASTICSEARCH_INDEX_NAME
 
     async def initialize_beanie(self):
@@ -51,7 +51,7 @@ class TitleIndexer:
         )
         return mongo_client
 
-    async def get_all_open_api_info(self) -> List[Dict[str, Any]]:
+    async def get_all_open_api_info(self) -> list[dict[str, Any]]:
         try:
             documents = await OpenAPIInfo.find_all().to_list()
             return [doc.model_dump() for doc in documents]
@@ -59,7 +59,7 @@ class TitleIndexer:
             logger.error(f"OpenAPIInfo 조회 중 오류 발생: {e}")
             raise
 
-    async def get_all_open_file_info(self) -> List[Dict[str, Any]]:
+    async def get_all_open_file_info(self) -> list[dict[str, Any]]:
         try:
             documents = await OpenFileInfo.find_all().to_list()
             return [doc.model_dump() for doc in documents]
@@ -70,11 +70,12 @@ class TitleIndexer:
     def create_elasticsearch_index(self):
         """
         Elasticsearch 인덱스 생성 및 매핑 설정
-        
+
         검색 필드 구성:
         - 핵심 검색 필드 (높은 가중치): list_title, title, desc, keywords
         - 필터/태그 검색 (낮은 가중치): category_nm
         """
+        SYNONYM_FILE_PATH = "synonyms.txt"
         mapping = {
             "mappings": {
                 "properties": {
@@ -84,7 +85,10 @@ class TitleIndexer:
                         "analyzer": "nori_analyzer",
                         "search_analyzer": "nori_analyzer",
                         "fields": {
-                            "keyword": {"type": "keyword", "ignore_above": 256},
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256,
+                            },
                             "ngram": {
                                 "type": "text",
                                 "analyzer": "ngram_analyzer",
@@ -98,7 +102,10 @@ class TitleIndexer:
                         "analyzer": "english_analyzer",
                         "search_analyzer": "english_analyzer",
                         "fields": {
-                            "keyword": {"type": "keyword", "ignore_above": 256},
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256,
+                            },
                             "korean": {
                                 "type": "text",
                                 "analyzer": "nori_analyzer",
@@ -123,15 +130,21 @@ class TitleIndexer:
                     },
                     "data_format": {"type": "keyword"},
                     "api_type": {"type": "keyword"},
+                    "data_type": {"type": "keyword"},
                 }
             },
             "settings": {
                 "analysis": {
                     "analyzer": {
                         "nori_analyzer": {
-                            "type": "nori",
+                            "type": "custom",
                             "tokenizer": "nori_tokenizer",
-                            "filter": ["nori_readingform", "lowercase", "trim"],
+                            "filter": [
+                                "nori_readingform",
+                                "lowercase",
+                                "trim",
+                                "my_synonym_filter",
+                            ],
                         },
                         "english_analyzer": {
                             "type": "custom",
@@ -150,10 +163,14 @@ class TitleIndexer:
                         },
                     },
                     "filter": {
+                        "my_synonym_filter": {
+                            "type": "synonym",
+                            "synonyms": SYNONYM_FILE_PATH,
+                        },
                         "ngram_filter": {
                             "type": "ngram",
                             "min_gram": 2,
-                            "max_gram": 3,
+                            "max_gram": 50,
                         },
                         "english_stop": {
                             "type": "stop",
@@ -170,14 +187,20 @@ class TitleIndexer:
         }
 
         try:
-            if not self.es.indices.exists(index=self.index_name):
-                self.es.indices.create(index=self.index_name, body=mapping)
+            if self.es.indices.exists(index=self.index_name):
+                self.es.indices.delete(index=self.index_name)
+                logger.warning(f"기존 인덱스 '{self.index_name}' 삭제 완료.")
+
+            self.es.indices.create(index=self.index_name, **mapping)
+            logger.info(f"새로운 인덱스 '{self.index_name}' 및 튜닝된 분석기 생성 완료.")
         except Exception as e:
             logger.error(f"인덱스 생성 중 오류 발생: {e}")
             raise
 
-    def index_documents(self, documents: List[Dict[str, Any]]):
+    def index_documents(self, documents: list[dict[str, Any]]):
         try:
+            from elasticsearch.helpers import bulk
+            actions = []
             api_count = 0
             file_count = 0
 
@@ -213,14 +236,23 @@ class TitleIndexer:
                     }
                     file_count += 1
 
-                self.es.index(
-                    index=self.index_name, id=doc.get("list_id"), body=es_doc
-                )
+                actions.append({
+                    '_index': self.index_name,
+                    '_id': doc.get("list_id"),
+                    '_source': es_doc,
+                })
+
+            success, failed = bulk(self.es, actions)
 
             self.es.indices.refresh(index=self.index_name)
             logger.info(
-                f"인덱싱 완료! API: {api_count}개, File: {file_count}개, 총 {len(documents)}개"
+                f"인덱싱 완료! API: {api_count}개, "
+                f"File: {file_count}개, 총 {len(documents)}개"
             )
+
+            if failed:
+                logger.error(f"인덱싱 실패한 문서: {failed}")
+                raise Exception(f"인덱싱 실패한 문서: {failed}")
         except Exception as e:
             logger.error(f"문서 인덱싱 중 오류 발생: {e}")
             raise

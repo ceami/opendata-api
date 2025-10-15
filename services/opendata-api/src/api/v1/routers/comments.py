@@ -16,13 +16,20 @@ from typing import Any
 
 from beanie import PydanticObjectId
 from beanie.operators import Eq
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Request
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+)
 
 from api.v1.application.open_data.dto import CreateCommentDTO
 from core.dependencies import get_logger_service, limiter
 from models import Comment
 from utils.datetime_util import now_kst
-
 
 comments_router = APIRouter(prefix="/comments", tags=["comments"])
 
@@ -35,7 +42,9 @@ async def create_comment(
     logger: logging.Logger = Depends(lambda: get_logger_service("comments")),
 ):
     try:
-        doc = Comment(list_id=body.list_id, content=body.content, created_at=now_kst())
+        doc = Comment(
+            list_id=body.list_id, content=body.content, created_at=now_kst()
+        )
         await doc.insert()
         return {"id": str(doc.id)}
     except Exception as e:

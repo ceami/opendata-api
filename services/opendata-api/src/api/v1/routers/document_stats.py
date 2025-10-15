@@ -15,9 +15,12 @@ import logging
 
 from fastapi import APIRouter, Depends, Request
 
-from core.dependencies import get_logger_service, get_app_documents_service, limiter
 from api.v1.application.open_data.dto import SuccessRateDTO
-
+from core.dependencies import (
+    get_app_documents_service,
+    get_logger_service,
+    limiter,
+)
 
 stats_router = APIRouter(prefix="/document", tags=["stats"])
 
@@ -27,7 +30,9 @@ stats_router = APIRouter(prefix="/document", tags=["stats"])
 async def get_success_rate(
     request: Request,
     documents_service=Depends(get_app_documents_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("document_stats")),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_stats")
+    ),
 ):
     try:
         return await documents_service.get_success_rate()

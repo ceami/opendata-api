@@ -13,7 +13,7 @@
 # limitations under the License.
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from elasticsearch import Elasticsearch
 
@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 class TitleIndexer:
     def __init__(
         self,
-        mongo_uri: str = None,
-        es_hosts: List[str] = None,
+        mongo_uri: str | None = None,
+        es_hosts: list[str] | None = None,
     ):
         settings = get_settings()
         if mongo_uri is None:
@@ -37,7 +37,7 @@ class TitleIndexer:
             es_hosts = [settings.ELASTICSEARCH_URL]
 
         self.mongo_uri = mongo_uri
-        self.es = Elasticsearch(es_hosts)
+        self.es = Elasticsearch(hosts=es_hosts)
         self.index_name = settings.ELASTICSEARCH_INDEX_NAME
 
     async def initialize_beanie(self):
@@ -51,7 +51,7 @@ class TitleIndexer:
         )
         return mongo_client
 
-    async def get_all_open_api_info(self) -> List[Dict[str, Any]]:
+    async def get_all_open_api_info(self) -> list[dict[str, Any]]:
         try:
             documents = await OpenAPIInfo.find_all().to_list()
             return [doc.model_dump() for doc in documents]
@@ -59,7 +59,7 @@ class TitleIndexer:
             logger.error(f"OpenAPIInfo 조회 중 오류 발생: {e}")
             raise
 
-    async def get_all_open_file_info(self) -> List[Dict[str, Any]]:
+    async def get_all_open_file_info(self) -> list[dict[str, Any]]:
         try:
             documents = await OpenFileInfo.find_all().to_list()
             return [doc.model_dump() for doc in documents]
@@ -76,7 +76,10 @@ class TitleIndexer:
                         "analyzer": "nori_analyzer",
                         "search_analyzer": "nori_analyzer",
                         "fields": {
-                            "keyword": {"type": "keyword", "ignore_above": 256},
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256,
+                            },
                             "ngram": {
                                 "type": "text",
                                 "analyzer": "ngram_analyzer",
@@ -89,7 +92,10 @@ class TitleIndexer:
                         "analyzer": "english_analyzer",
                         "search_analyzer": "english_analyzer",
                         "fields": {
-                            "keyword": {"type": "keyword", "ignore_above": 256},
+                            "keyword": {
+                                "type": "keyword",
+                                "ignore_above": 256,
+                            },
                             "korean": {
                                 "type": "text",
                                 "analyzer": "nori_analyzer",
@@ -119,7 +125,11 @@ class TitleIndexer:
                         "nori_analyzer": {
                             "type": "nori",
                             "tokenizer": "nori_tokenizer",
-                            "filter": ["nori_readingform", "lowercase", "trim"],
+                            "filter": [
+                                "nori_readingform",
+                                "lowercase",
+                                "trim",
+                            ],
                         },
                         "english_analyzer": {
                             "type": "custom",
@@ -159,12 +169,12 @@ class TitleIndexer:
 
         try:
             if not self.es.indices.exists(index=self.index_name):
-                self.es.indices.create(index=self.index_name, body=mapping)
+                self.es.indices.create(index=self.index_name, **mapping)
         except Exception as e:
             logger.error(f"인덱스 생성 중 오류 발생: {e}")
             raise
 
-    def index_documents(self, documents: List[Dict[str, Any]]):
+    def index_documents(self, documents: list[dict[str, Any]]):
         try:
             api_count = 0
             file_count = 0
@@ -202,12 +212,15 @@ class TitleIndexer:
                     file_count += 1
 
                 self.es.index(
-                    index=self.index_name, id=doc.get("list_id"), body=es_doc
+                    index=self.index_name,
+                    id=doc.get("list_id"),
+                    document=es_doc,
                 )
 
             self.es.indices.refresh(index=self.index_name)
             logger.info(
-                f"인덱싱 완료! API: {api_count}개, File: {file_count}개, 총 {len(documents)}개"
+                f"인덱싱 완료! API: {api_count}개, "
+                f"File: {file_count}개, 총 {len(documents)}개"
             )
         except Exception as e:
             logger.error(f"문서 인덱싱 중 오류 발생: {e}")

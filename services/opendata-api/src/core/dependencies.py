@@ -18,7 +18,8 @@ from functools import lru_cache
 from typing import Any
 
 from elasticsearch import Elasticsearch
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 
@@ -29,12 +30,18 @@ from .settings import Settings, get_settings
 limiter = Limiter(key_func=get_remote_address)
 
 
+def rate_limit_exceeded_handler_wrapper(
+    request: Request, exc: Exception
+) -> Response:
+    return _rate_limit_exceeded_handler(request, exc)
+
+
 def get_rate_limit_exceeded_handler():
-    return _rate_limit_exceeded_handler
+    return rate_limit_exceeded_handler_wrapper
 
 
 class ServiceContainer:
-    _instance: "ServiceContainer" | None = None
+    _instance: Any | None = None
     _services: dict[str, Any] = {}
     _semaphores: dict[str, asyncio.Semaphore] = {}
     _loggers: dict[str, logging.Logger] = {}
@@ -217,13 +224,23 @@ def get_app_search_service():
 
 
 def get_app_pagination_service():
-    from api.v1.application.open_data.pagination_service import PaginationAppService
+    from api.v1.application.open_data.pagination_service import (
+        PaginationAppService,
+    )
 
     cross = get_cross_collection_service()
     return PaginationAppService(cross)
 
 
 def get_app_documents_service():
-    from api.v1.application.open_data.documents_service import DocumentsAppService
+    from api.v1.application.open_data.documents_service import (
+        DocumentsAppService,
+    )
 
     return DocumentsAppService()
+
+
+def get_recommendation_service():
+    from recommend_system.recommendation_service import RecommendationService
+
+    return RecommendationService()

@@ -37,10 +37,26 @@ class SearchProvider:
         else:
             base_query = self._build_fuzzy_match_query(query)
 
-        search_query = self._add_data_type_filter(base_query, data_type)
+        if data_type:
+            search_query = {
+                "bool": {
+                    "must": [base_query, {"term": {"data_type": data_type}}]
+                }
+            }
+        else:
+            search_query = base_query
+
         search_body = {
             "query": search_query,
-            "highlight": self._get_highlight_config(),
+            "highlight": {
+                "fields": {
+                    "list_title": {},
+                    "title": {},
+                    "title.korean": {},
+                    "keywords": {},
+                    "org_nm": {},
+                }
+            },
             "size": size,
             "from": from_,
         }
@@ -49,7 +65,7 @@ class SearchProvider:
             search_body["min_score"] = min_score
 
         try:
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             return response["hits"]
         except Exception:
             raise
@@ -58,9 +74,17 @@ class SearchProvider:
         return {
             "bool": {
                 "should": [
-                    {"match_phrase": {"list_title": {"query": query, "boost": 3.0}}},
+                    {
+                        "match_phrase": {
+                            "list_title": {"query": query, "boost": 3.0}
+                        }
+                    },
                     {"match_phrase": {"title": {"query": query, "boost": 2.0}}},
-                    {"match_phrase": {"org_nm": {"query": query, "boost": 1.5}}},
+                    {
+                        "match_phrase": {
+                            "org_nm": {"query": query, "boost": 1.5}
+                        }
+                    },
                 ],
                 "minimum_should_match": 1,
             }
@@ -77,9 +101,7 @@ class SearchProvider:
                                 "list_title^3",
                                 "title^2",
                                 "title.korean^2",
-                                "keywords^2",
                                 "org_nm^1.5",
-                                "category_nm^1.5",
                                 "dept_nm^1.5",
                                 "desc^0.8",
                             ],
@@ -94,29 +116,11 @@ class SearchProvider:
                             "query": query,
                             "fields": ["list_title^4", "title^3", "org_nm^2"],
                             "type": "phrase",
-                            "boost": 2.0,
+                            "boost": 4.0,
                         }
                     },
                 ],
                 "minimum_should_match": 1,
-            }
-        }
-
-    def _add_data_type_filter(
-        self, base_query: dict[str, Any], data_type: str | None
-    ) -> dict[str, Any]:
-        if data_type:
-            return {"bool": {"must": [base_query, {"term": {"data_type": data_type}}]}}
-        return base_query
-
-    def _get_highlight_config(self) -> dict[str, Any]:
-        return {
-            "fields": {
-                "list_title": {},
-                "title": {},
-                "title.korean": {},
-                "keywords": {},
-                "org_nm": {},
             }
         }
 
@@ -139,19 +143,31 @@ class SearchProvider:
             should_clauses.append(self._build_weighted_query(query, weight))
 
         search_body = {
-            "query": {"bool": {"should": should_clauses, "minimum_should_match": 1}},
-            "highlight": {"fields": {"list_title": {}, "title": {}}},
+            "query": {
+                "bool": {"should": should_clauses, "minimum_should_match": 1}
+            },
+            "highlight": {
+                "fields": {
+                    "list_title": {},
+                    "title": {},
+                    "title.korean": {},
+                    "keywords": {},
+                    "org_nm": {},
+                }
+            },
             "size": size,
             "from": from_,
         }
 
         try:
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             return response["hits"]
         except Exception:
             raise
 
-    def _build_weighted_query(self, query: str, weight: float) -> dict[str, Any]:
+    def _build_weighted_query(
+        self, query: str, weight: float
+    ) -> dict[str, Any]:
         return {
             "multi_match": {
                 "query": query,
@@ -213,13 +229,21 @@ class SearchProvider:
 
         search_body = {
             "query": strict_query,
-            "highlight": self._get_highlight_config(),
+            "highlight": {
+                "fields": {
+                    "list_title": {},
+                    "title": {},
+                    "title.korean": {},
+                    "keywords": {},
+                    "org_nm": {},
+                }
+            },
             "size": size,
             "from": from_,
         }
 
         try:
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             hits = response["hits"]
 
             if hits["total"]["value"] >= size:
@@ -228,7 +252,7 @@ class SearchProvider:
             relaxed_query = self._build_fuzzy_match_query(query)
             search_body["query"] = relaxed_query
 
-            response = self.es.search(index=self.index_name, body=search_body)
+            response = self.es.search(index=self.index_name, **search_body)
             return response["hits"]
 
         except Exception:

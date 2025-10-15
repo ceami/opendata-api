@@ -16,18 +16,20 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from api.v1.application.open_data.dto import UnifiedDataItemDTO, PaginatedUnifiedDataDTO
+from api.v1.application.open_data.dto import (
+    PaginatedUnifiedDataDTO,
+    UnifiedDataItemDTO,
+)
 from core.dependencies import (
+    get_app_pagination_service,
+    get_app_search_service,
     get_cross_collection_service,
     get_logger_service,
-    get_app_search_service,
-    get_app_pagination_service,
     get_search_service,
     limiter,
 )
 from models import GeneratedAPIDocs, GeneratedFileDocs
 from utils.datetime_util import format_datetime
-
 
 list_router = APIRouter(prefix="/document", tags=["list"])
 
@@ -35,7 +37,9 @@ list_router = APIRouter(prefix="/document", tags=["list"])
 @list_router.get(
     path="",
     response_model=dict[str, Any],
-    responses={status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Server error"}},
+    responses={
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Server error"}
+    },
     description="opendata-web용 통합 API - 검색 / 목록 제공 (API + File)",
 )
 @limiter.limit("60/minute")
@@ -57,11 +61,15 @@ async def get_list(
     search_app_service=Depends(get_app_search_service),
     pagination_service=Depends(get_app_pagination_service),
     search_service=Depends(get_search_service),
-    logger: logging.Logger = Depends(lambda: get_logger_service("document_list")),
+    logger: logging.Logger = Depends(
+        lambda: get_logger_service("document_list")
+    ),
 ):
     try:
         if q and q.strip():
-            logger.info(f"[Document/List] 검색 요청: 검색어='{q.strip()}', page={page}, size={size}")
+            logger.info(
+                f"[Document/List] 검색 요청: 검색어='{q.strip()}', page={page}, size={size}"
+            )
             search_result = await search_app_service.get_frontend_data_search(
                 q=q,
                 page=page,
@@ -79,8 +87,12 @@ async def get_list(
             if page > total_pages and total_pages > 0:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"페이지 번호가 범위를 초과했습니다. (요청: {page}, 최대: {total_pages})"
+                    detail=f"페이지 번호가 범위를 초과했습니다. (요청: {page}, 최대: {total_pages})",
                 )
+
+            for item in items_data:
+                if item.get("list_title"):
+                    item["list_title"] = item["list_title"].replace("_", " ")
 
             dto_result = PaginatedUnifiedDataDTO(
                 items=[UnifiedDataItemDTO(**item) for item in items_data],
@@ -94,13 +106,20 @@ async def get_list(
             return dto_result.model_dump(by_alias=True)
 
         if sort_by not in ["popular", "trending", "all"]:
-            raise HTTPException(status_code=400, detail="sort_by는 'popular' 또는 'trending'이어야 합니다")
+            raise HTTPException(
+                status_code=400,
+                detail="sort_by는 'popular' 또는 'trending'이어야 합니다",
+            )
 
         rank_sort_by = "popular" if sort_by == "all" else sort_by
-        rank_result = await cross_collection_service.get_ranked_snapshots(sort_by=rank_sort_by, page=page, size=size)
+        rank_result = await cross_collection_service.get_ranked_snapshots(
+            sort_by=rank_sort_by, page=page, size=size
+        )
 
         if rank_result.get("redirect_to_original"):
-            logger.info(f"[Document/List] 스냅샷 한계, fallback: page={page}, size={size}")
+            logger.info(
+                f"[Document/List] 스냅샷 한계, fallback: page={page}, size={size}"
+            )
 
             consistent_total = rank_result.get("total")
 
@@ -116,12 +135,14 @@ async def get_list(
             )
 
             final_total = consistent_total if consistent_total else dto.total
-            total_pages = (final_total + dto.size - 1) // dto.size if dto.size > 0 else 0
+            total_pages = (
+                (final_total + dto.size - 1) // dto.size if dto.size > 0 else 0
+            )
 
             if page > total_pages and total_pages > 0:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"페이지 번호가 범위를 초과했습니다. (요청: {page}, 최대: {total_pages})"
+                    detail=f"페이지 번호가 범위를 초과했습니다. (요청: {page}, 최대: {total_pages})",
                 )
 
             formatted_items = []
@@ -131,20 +152,30 @@ async def get_list(
 
                 generated_at = None
                 if data_type == "API":
-                    api_doc = await GeneratedAPIDocs.find_one({"list_id": list_id})
+                    api_doc = await GeneratedAPIDocs.find_one(
+                        {"list_id": list_id}
+                    )
                     if api_doc:
                         generated_at = getattr(api_doc, "generated_at", None)
                 else:
-                    file_doc = await GeneratedFileDocs.find_one({"list_id": list_id})
+                    file_doc = await GeneratedFileDocs.find_one(
+                        {"list_id": list_id}
+                    )
                     if file_doc:
                         generated_at = getattr(file_doc, "generated_at", None)
 
-                generated_at_str = format_datetime(generated_at) if generated_at else None
+                generated_at_str = (
+                    format_datetime(generated_at) if generated_at else None
+                )
+
+                list_title = item.list_title or item.title
+                if list_title:
+                    list_title = list_title.replace("_", " ")
 
                 formatted_items.append(
                     {
                         "list_id": list_id,
-                        "list_title": item.list_title or item.title,
+                        "list_title": list_title,
                         "org_nm": item.org_nm or item.department,
                         "token_count": item.token_count,
                         "has_generated_doc": item.has_generated_doc,
@@ -167,10 +198,14 @@ async def get_list(
 
         formatted_items = []
         for item in rank_result["data"]:
+            list_title = item.get("list_title", "")
+            if list_title:
+                list_title = list_title.replace("_", " ")
+
             formatted_items.append(
                 {
                     "list_id": item.get("list_id"),
-                    "list_title": item.get("list_title", ""),
+                    "list_title": list_title,
                     "org_nm": item.get("org_nm"),
                     "token_count": item.get("token_count", 0),
                     "has_generated_doc": item.get("has_generated_doc", False),
@@ -188,7 +223,7 @@ async def get_list(
         if page > total_pages and total_pages > 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"페이지 번호가 범위를 초과했습니다. (요청: {page}, 최대: {total_pages})"
+                detail=f"페이지 번호가 범위를 초과했습니다. (요청: {page}, 최대: {total_pages})",
             )
 
         dto_result = PaginatedUnifiedDataDTO(

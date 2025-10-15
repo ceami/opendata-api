@@ -210,3 +210,4 @@ __marimo__/
 docker-compose.override*
 
 .DS_Store
+.vscode

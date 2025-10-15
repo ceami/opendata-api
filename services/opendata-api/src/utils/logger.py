@@ -128,7 +128,8 @@ class StreamingFileHandler(logging.Handler):
             }
 
             if record.exc_info:
-                structured_log["exception"] = self.formatException(
+                formatter = logging.Formatter()
+                structured_log["exception"] = formatter.formatException(
                     record.exc_info
                 )
 

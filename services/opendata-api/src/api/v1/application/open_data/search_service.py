@@ -13,8 +13,18 @@
 # limitations under the License.
 from typing import Any
 
-from models import GeneratedAPIDocs, GeneratedFileDocs, OpenAPIInfo, OpenFileInfo
 from beanie.operators import In
+
+from api.v1.application.open_data.dto import (
+    SearchStdDocsItemDTO,
+    SearchStdDocsResponseDTO,
+)
+from models import (
+    GeneratedAPIDocs,
+    GeneratedFileDocs,
+    OpenAPIInfo,
+    OpenFileInfo,
+)
 from utils.datetime_util import format_datetime
 
 
@@ -56,7 +66,9 @@ class SearchAppService:
         file_data_info: dict[int, dict[str, Any]] = {}
 
         if list_ids:
-            api_docs = await OpenAPIInfo.find(In(OpenAPIInfo.list_id, list_ids)).to_list()
+            api_docs = await OpenAPIInfo.find(
+                In(OpenAPIInfo.list_id, list_ids)
+            ).to_list()
             for doc in api_docs:
                 api_data_info[doc.list_id] = {
                     "list_title": doc.list_title,
@@ -64,21 +76,26 @@ class SearchAppService:
                     "data_type": "API",
                 }
 
-            file_docs = await OpenFileInfo.find(In(OpenFileInfo.list_id, list_ids)).to_list()
+            file_docs = await OpenFileInfo.find(
+                In(OpenFileInfo.list_id, list_ids)
+            ).to_list()
             for doc in file_docs:
-                file_data_info[doc.list_id] = {
-                    "list_title": getattr(doc, "list_title", None)
-                    or getattr(doc, "title", None),
-                    "org_nm": getattr(doc, "org_nm", None)
-                    or getattr(doc, "dept_nm", None),
-                    "data_type": "FILE",
-                }
+                if doc.list_id is not None:
+                    file_data_info[doc.list_id] = {
+                        "list_title": getattr(doc, "list_title", None)
+                        or getattr(doc, "title", None),
+                        "org_nm": getattr(doc, "org_nm", None)
+                        or getattr(doc, "dept_nm", None),
+                        "data_type": "FILE",
+                    }
 
         api_generated_docs: dict[int, dict[str, Any]] = {}
         file_generated_docs: dict[int, dict[str, Any]] = {}
 
         if list_ids:
-            generated_api_docs = await GeneratedAPIDocs.find(In(GeneratedAPIDocs.list_id, list_ids)).to_list()
+            generated_api_docs = await GeneratedAPIDocs.find(
+                In(GeneratedAPIDocs.list_id, list_ids)
+            ).to_list()
             for doc in generated_api_docs:
                 api_generated_docs[doc.list_id] = {
                     "token_count": doc.token_count,
@@ -86,7 +103,9 @@ class SearchAppService:
                     "generated_at": getattr(doc, "generated_at", None),
                 }
 
-            generated_file_docs = await GeneratedFileDocs.find(In(GeneratedFileDocs.list_id, list_ids)).to_list()
+            generated_file_docs = await GeneratedFileDocs.find(
+                In(GeneratedFileDocs.list_id, list_ids)
+            ).to_list()
             for doc in generated_file_docs:
                 file_generated_docs[doc.list_id] = {
                     "token_count": doc.token_count,
@@ -108,8 +127,12 @@ class SearchAppService:
                         "list_title": api_info["list_title"],
                         "org_nm": api_info["org_nm"],
                         "token_count": gen["token_count"] if gen else 0,
-                        "has_generated_doc": gen["has_generated_doc"] if gen else False,
-                        "updated_at": format_datetime(gen["generated_at"]) if gen else None,
+                        "has_generated_doc": gen["has_generated_doc"]
+                        if gen
+                        else False,
+                        "updated_at": format_datetime(gen["generated_at"])
+                        if gen
+                        else None,
                         "data_type": "API",
                         "score": hit.get("_score"),
                     }
@@ -123,15 +146,21 @@ class SearchAppService:
                         "list_title": file_info["list_title"],
                         "org_nm": file_info["org_nm"],
                         "token_count": gen["token_count"] if gen else 0,
-                        "has_generated_doc": gen["has_generated_doc"] if gen else False,
-                        "updated_at": format_datetime(gen["generated_at"]) if gen else None,
+                        "has_generated_doc": gen["has_generated_doc"]
+                        if gen
+                        else False,
+                        "updated_at": format_datetime(gen["generated_at"])
+                        if gen
+                        else None,
                         "data_type": "FILE",
                         "score": hit.get("_score"),
                     }
                 )
             elif list_id in file_generated_docs:
                 gen = file_generated_docs[list_id]
-                org_nm = api_data_info.get(list_id, {}).get("org_nm") or source.get("org_nm")
+                org_nm = api_data_info.get(list_id, {}).get(
+                    "org_nm"
+                ) or source.get("org_nm")
                 items.append(
                     {
                         "list_id": list_id,
@@ -172,7 +201,7 @@ class SearchAppService:
         page: int,
         page_size: int,
         search_service: Any,
-    ) -> dict[str, Any]:
+    ) -> SearchStdDocsResponseDTO:
         api_doc_list_ids = await GeneratedAPIDocs.find().to_list()
         file_doc_list_ids = await GeneratedFileDocs.find().to_list()
         api_list_ids = [doc.list_id for doc in api_doc_list_ids]
@@ -206,7 +235,9 @@ class SearchAppService:
 
         api_docs: dict[int, dict[str, Any]] = {}
         if list_ids:
-            api_docs_data = await GeneratedAPIDocs.find(In(GeneratedAPIDocs.list_id, list_ids)).to_list()
+            api_docs_data = await GeneratedAPIDocs.find(
+                In(GeneratedAPIDocs.list_id, list_ids)
+            ).to_list()
             for doc in api_docs_data:
                 api_docs[doc.list_id] = {
                     "data_type": "API",
@@ -215,7 +246,9 @@ class SearchAppService:
 
         file_docs: dict[int, dict[str, Any]] = {}
         if list_ids:
-            file_docs_data = await GeneratedFileDocs.find(In(GeneratedFileDocs.list_id, list_ids)).to_list()
+            file_docs_data = await GeneratedFileDocs.find(
+                In(GeneratedFileDocs.list_id, list_ids)
+            ).to_list()
             for doc in file_docs_data:
                 file_docs[doc.list_id] = {
                     "data_type": "FILE",
@@ -224,7 +257,9 @@ class SearchAppService:
 
         open_api_info: dict[int, dict[str, Any]] = {}
         if list_ids:
-            open_api_rows = await OpenAPIInfo.find(In(OpenAPIInfo.list_id, list_ids)).to_list()
+            open_api_rows = await OpenAPIInfo.find(
+                In(OpenAPIInfo.list_id, list_ids)
+            ).to_list()
             for doc in open_api_rows:
                 open_api_info[doc.list_id] = {
                     "org_nm": doc.org_nm,
@@ -234,15 +269,18 @@ class SearchAppService:
 
         open_file_info: dict[int, dict[str, Any]] = {}
         if list_ids:
-            open_file_rows = await OpenFileInfo.find(In(OpenFileInfo.list_id, list_ids)).to_list()
+            open_file_rows = await OpenFileInfo.find(
+                In(OpenFileInfo.list_id, list_ids)
+            ).to_list()
             for doc in open_file_rows:
-                open_file_info[doc.list_id] = {
-                    "org_nm": doc.org_nm,
-                    "list_title": doc.list_title or doc.title,
-                    "title": doc.title,
-                }
+                if doc.list_id is not None:
+                    open_file_info[doc.list_id] = {
+                        "org_nm": doc.org_nm,
+                        "list_title": doc.list_title or doc.title,
+                        "title": doc.title,
+                    }
 
-        results: list[dict[str, Any]] = []
+        results: list[SearchStdDocsItemDTO] = []
         for hit in paginated_hits:
             source = hit["_source"]
             list_id = source.get("list_id")
@@ -253,40 +291,71 @@ class SearchAppService:
                 data_type = doc_data["data_type"]
                 detail = doc_data.get("detail")
                 org_nm = open_api_info.get(list_id_int, {}).get("org_nm")
-                list_title = open_api_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
-                title = open_api_info.get(list_id_int, {}).get("title") or source.get("title", "")
+                list_title = open_api_info.get(list_id_int, {}).get(
+                    "list_title"
+                ) or source.get("list_title", "")
+                title = open_api_info.get(list_id_int, {}).get(
+                    "title"
+                ) or source.get("title", "")
             elif list_id_int in file_docs:
                 doc_data = file_docs[list_id_int]
                 data_type = doc_data["data_type"]
                 detail = doc_data.get("detail")
                 org_nm = open_file_info.get(list_id_int, {}).get("org_nm")
-                list_title = open_file_info.get(list_id_int, {}).get("list_title") or source.get("list_title", "")
-                title = open_file_info.get(list_id_int, {}).get("title") or source.get("title", "")
+                list_title = open_file_info.get(list_id_int, {}).get(
+                    "list_title"
+                ) or source.get("list_title", "")
+                title = open_file_info.get(list_id_int, {}).get(
+                    "title"
+                ) or source.get("title", "")
             else:
                 data_type = source.get("data_type", "API")
                 detail = None
-                org_nm = open_api_info.get(list_id_int, {}).get("org_nm") or open_file_info.get(list_id_int, {}).get("org_nm")
+                org_nm = (
+                    open_api_info.get(list_id_int, {}).get("org_nm")
+                    if list_id_int is not None
+                    else None
+                ) or (
+                    open_file_info.get(list_id_int, {}).get("org_nm")
+                    if list_id_int is not None
+                    else None
+                )
                 list_title = source.get("list_title", "")
                 title = source.get("title", "")
 
             results.append(
-                {
-                    "list_id": list_id,
-                    "list_title": list_title,
-                    "org_nm": org_nm,
-                    "title": title,
-                    "score": hit.get("_score"),
-                    "data_type": data_type,
-                    "detail": detail,
-                }
+                SearchStdDocsItemDTO(
+                    list_id=list_id,
+                    list_title=list_title,
+                    org_nm=org_nm,
+                    title=title,
+                    score=hit.get("_score"),
+                    data_type=data_type,
+                    detail=detail,
+                )
             )
 
-        return {
-            "total": len(filtered_hits),
-            "page": page,
-            "page_size": page_size,
-            "results": results,
-        }
+        return SearchStdDocsResponseDTO(
+            total=len(filtered_hits),
+            page=page,
+            page_size=page_size,
+            results=results,
+        )
+
+    async def search_titles_std_docs(
+        self,
+        *,
+        q: str,
+        page: int,
+        page_size: int,
+        search_service: Any,
+    ) -> SearchStdDocsResponseDTO:
+        return await self.search_titles_with_docs_multi(
+            queries=[q],
+            page=page,
+            page_size=page_size,
+            search_service=search_service,
+        )
 
     def get_index_stats(self, *, search_service: Any) -> dict[str, Any]:
         stats = search_service.get_index_stats()
