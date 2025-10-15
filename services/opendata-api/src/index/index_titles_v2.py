@@ -75,6 +75,7 @@ class TitleIndexer:
         - 핵심 검색 필드 (높은 가중치): list_title, title, desc, keywords
         - 필터/태그 검색 (낮은 가중치): category_nm
         """
+        SYNONYM_FILE_PATH = "synonyms.txt"
         mapping = {
             "mappings": {
                 "properties": {
@@ -129,18 +130,20 @@ class TitleIndexer:
                     },
                     "data_format": {"type": "keyword"},
                     "api_type": {"type": "keyword"},
+                    "data_type": {"type": "keyword"},
                 }
             },
             "settings": {
                 "analysis": {
                     "analyzer": {
                         "nori_analyzer": {
-                            "type": "nori",
+                            "type": "custom",
                             "tokenizer": "nori_tokenizer",
                             "filter": [
                                 "nori_readingform",
                                 "lowercase",
                                 "trim",
+                                "my_synonym_filter",
                             ],
                         },
                         "english_analyzer": {
@@ -160,10 +163,14 @@ class TitleIndexer:
                         },
                     },
                     "filter": {
+                        "my_synonym_filter": {
+                            "type": "synonym",
+                            "synonyms": SYNONYM_FILE_PATH,
+                        },
                         "ngram_filter": {
                             "type": "ngram",
                             "min_gram": 2,
-                            "max_gram": 3,
+                            "max_gram": 50,
                         },
                         "english_stop": {
                             "type": "stop",
@@ -180,14 +187,20 @@ class TitleIndexer:
         }
 
         try:
-            if not self.es.indices.exists(index=self.index_name):
-                self.es.indices.create(index=self.index_name, **mapping)
+            if self.es.indices.exists(index=self.index_name):
+                self.es.indices.delete(index=self.index_name)
+                logger.warning(f"기존 인덱스 '{self.index_name}' 삭제 완료.")
+
+            self.es.indices.create(index=self.index_name, **mapping)
+            logger.info(f"새로운 인덱스 '{self.index_name}' 및 튜닝된 분석기 생성 완료.")
         except Exception as e:
             logger.error(f"인덱스 생성 중 오류 발생: {e}")
             raise
 
     def index_documents(self, documents: list[dict[str, Any]]):
         try:
+            from elasticsearch.helpers import bulk
+            actions = []
             api_count = 0
             file_count = 0
 
@@ -223,17 +236,23 @@ class TitleIndexer:
                     }
                     file_count += 1
 
-                self.es.index(
-                    index=self.index_name,
-                    id=doc.get("list_id"),
-                    document=es_doc,
-                )
+                actions.append({
+                    '_index': self.index_name,
+                    '_id': doc.get("list_id"),
+                    '_source': es_doc,
+                })
+
+            success, failed = bulk(self.es, actions)
 
             self.es.indices.refresh(index=self.index_name)
             logger.info(
                 f"인덱싱 완료! API: {api_count}개, "
                 f"File: {file_count}개, 총 {len(documents)}개"
             )
+
+            if failed:
+                logger.error(f"인덱싱 실패한 문서: {failed}")
+                raise Exception(f"인덱싱 실패한 문서: {failed}")
         except Exception as e:
             logger.error(f"문서 인덱싱 중 오류 발생: {e}")
             raise

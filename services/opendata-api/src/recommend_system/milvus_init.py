@@ -14,7 +14,7 @@
 from typing import Any
 
 import numpy as np
-from pymilvus import DataType, MilvusClient
+from pymilvus import DataType, Function, FunctionType, MilvusClient
 from pymongo import MongoClient
 from sentence_transformers import SentenceTransformer
 
@@ -45,16 +45,39 @@ def init_milvus_collection(col_name: str, dim: int) -> MilvusClient:
         schema.add_field(
             field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=dim
         )
+        schema.add_field(
+            field_name="content",
+            datatype=DataType.VARCHAR,
+            analyzer_type={"tokenizer": "standard"},
+            max_length=65536,
+            enable_match=True,
+            enable_analyzer=True,
+        )
+
+        bm25_function = Function(
+            name="bm25",
+            function_type=FunctionType.BM25,
+            input_field_names=["content"],
+            output_field_names="sparse_vector",
+        )
+
+        schema.add_function(bm25_function)
 
         client.create_collection(collection_name=col_name, schema=schema)
         print(f"컬렉션 '{col_name}' 생성 완료")
 
         index_params = MilvusClient.prepare_index_params()
         index_params.add_index(
-            field_name="vector",
-            index_type="IVF_FLAT",
+            field_name="vector_ivf",
+            index_type="FLAT",
             metric_type="COSINE",
-            params={"nlist": 128},
+            params={"nlist": 128, 'nprobe': 64},
+        )
+        index_params.add_index(
+            field_name="vector_hnsw",
+            index_type="HNSW",
+            metric_type="COSINE",
+            params={"M": 32, "efConstruction": 100, 'ef': 128},
         )
 
         client.create_index(
@@ -75,6 +98,7 @@ def insert_vectors_milvus(
     collection_name: str,
     doc_ids: list[str],
     embeddings: np.ndarray,
+    contents: list[str],
     batch_size: int = 50,
 ) -> Any:
     """문서 ID와 임베딩 벡터를 Milvus에 배치로 삽입"""
@@ -84,10 +108,11 @@ def insert_vectors_milvus(
         for i in range(0, len(doc_ids), batch_size):
             batch_ids = doc_ids[i:i + batch_size]
             batch_embeddings = embeddings[i:i + batch_size]
+            batch_contents = contents[i:i + batch_size]
 
             data = [
-                {"doc_id": doc_id, "vector": vec.tolist()}
-                for doc_id, vec in zip(batch_ids, batch_embeddings)
+                {"doc_id": doc_id, "vector": vec.tolist(), "content": content}
+                for doc_id, vec, content in zip(batch_ids, batch_embeddings, batch_contents)
             ]
 
             client.insert(collection_name=collection_name, data=data)
@@ -194,17 +219,21 @@ if __name__ == "__main__":
         print(f"{len(embedding_texts)}개 임베딩 텍스트 생성 완료")
 
         embeddings = emb_texts(model, embedding_texts)
+        import pickle
+        with open("embeddings.pkl", "wb") as f:
+            pickle.dump(embeddings, f)
 
         print("Milvus 컬렉션 초기화 중...")
         client = init_milvus_collection(
-            "recommendation_db", embeddings.shape[1]
+            "recommendation_db_v2", embeddings.shape[1]
         )
 
         print("임베딩 삽입 중...")
         insert_vectors_milvus(
             client,
-            "recommendation_db",
+            "recommendation_db_v2",
             [d["_id"] for d in data],
+            [create_embedding_text(d) for d in data],
             embeddings,
             batch_size=50
         )

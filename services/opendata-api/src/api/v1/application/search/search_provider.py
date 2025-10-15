@@ -101,9 +101,7 @@ class SearchProvider:
                                 "list_title^3",
                                 "title^2",
                                 "title.korean^2",
-                                "keywords^2",
                                 "org_nm^1.5",
-                                "category_nm^1.5",
                                 "dept_nm^1.5",
                                 "desc^0.8",
                             ],
@@ -118,7 +116,7 @@ class SearchProvider:
                             "query": query,
                             "fields": ["list_title^4", "title^3", "org_nm^2"],
                             "type": "phrase",
-                            "boost": 2.0,
+                            "boost": 4.0,
                         }
                     },
                 ],
