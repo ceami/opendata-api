@@ -26,7 +26,6 @@ from .open_data import (
     SavedRequest,
     DocRecommendation,
 )
-from .comments import Comment
 
 __all__ = [
     "APIStdDocument",
@@ -42,5 +41,4 @@ __all__ = [
     "RankMetadata",
     "SavedRequest",
     "DocRecommendation",
-    "Comment",
 ]

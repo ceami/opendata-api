@@ -187,20 +187,6 @@ class SaveRequestDTO(BaseModel):
     url: str | None = None
 
 
-class CreateCommentDTO(BaseModel):
-    model_config = ConfigDict(
-        extra="ignore",
-        alias_generator=AliasGenerator(
-            validation_alias=to_camel,
-            serialization_alias=to_camel,
-        ),
-        populate_by_name=True,
-    )
-
-    list_id: int
-    content: str
-
-
 class SearchStdDocsItemDTO(BaseModel):
     model_config = ConfigDict(
         extra="ignore",
