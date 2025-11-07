@@ -270,7 +270,7 @@ class CatalogService:
                     "token_count": gen.token_count if gen else 0,
                     "has_generated_doc": gen is not None,
                     "updated_at": doc.updated_at,
-                    "generated_at": getattr(gen, "generated_at", None),
+                    "created_at": getattr(gen, "created_at", None),
                     "popularity_score": int(doc.request_cnt or 0),
                 }
             )
@@ -293,7 +293,7 @@ class CatalogService:
                     "token_count": gen.token_count if gen else 0,
                     "has_generated_doc": gen is not None,
                     "updated_at": doc.updated_at,
-                    "generated_at": getattr(gen, "generated_at", None),
+                    "created_at": getattr(gen, "created_at", None),
                     "popularity_score": int(
                         getattr(doc, "download_cnt", 0) or 0
                     ),
@@ -302,18 +302,18 @@ class CatalogService:
 
         latest_sorted = sorted(
             rows,
-            key=lambda r: (r.get("generated_at") or r.get("updated_at") or now),
+            key=lambda r: (r.get("created_at") or r.get("updated_at") or now),
             reverse=True,
         )
         await self._bulk_upsert_rank(
-            RankLatest, latest_sorted[:1000], score_field=None
+            RankLatest, latest_sorted[:200000], score_field=None
         )
 
         popular_sorted = sorted(
             rows, key=lambda r: r.get("popularity_score", 0), reverse=True
         )
         await self._bulk_upsert_rank(
-            RankPopular, popular_sorted[:1000], score_field=None
+            RankPopular, popular_sorted[:200000], score_field=None
         )
 
         trending_rows: list[dict[str, Any]] = []
