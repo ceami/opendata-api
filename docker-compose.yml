@@ -83,9 +83,6 @@ services:
     expose:
       - 19530
       - 9091
-    ports:
-      - "19530:19530"
-      - "9091:9091"
     volumes:
       - milvus-data:/var/lib/milvus
     depends_on:
@@ -109,9 +106,9 @@ services:
     container_name: opendata-etcd
     restart: unless-stopped
     command: etcd --data-dir /etcd
-    ports:
-      - "2379:2379"
-      - "2380:2380"
+    expose:
+      - 2379
+      - 2380
     volumes:
       - etcd-data:/etcd
     healthcheck:
@@ -129,9 +126,9 @@ services:
     container_name: opendata-minio
     restart: unless-stopped
     command: minio server /minio_data --console-address ":9001"
-    ports:
-      - "9001:9001"
-      - "9000:9000"
+    expose:
+      - 9001
+      - 9000
     volumes:
       - minio-data:/minio_data
     healthcheck:
