@@ -164,7 +164,7 @@ uv run --frozen pytest -q
 
 ### API 테스트 환경과 Pydantic 검증
 
-`services/opendata-api`의 `uv.lock` 확인은 통과했지만, 기본 locked runtime에는 pytest가 들어 있지 않아 `uv run --frozen pytest -q`는 `Failed to spawn: pytest`로 종료했다. 의존성 manifest를 변경하지 않고 저장소의 `tests/requirements.txt`로 별도 임시 환경을 만들었다.
+`services/opendata-api`의 `uv.lock` 확인은 통과했지만, 기본 locked runtime에는 pytest가 들어 있지 않아 `uv run --frozen pytest -q`는 `Failed to spawn: pytest`로 종료했다. 운영 런타임 의존성은 변경하지 않고, 문서 추출기 의존성을 포함한 테스트 전용 `tests/requirements.txt`로 별도 임시 환경을 만들었다.
 
 ```bash
 cd services/opendata-api
@@ -174,7 +174,7 @@ uv pip install --python /tmp/opendata-api-task6-venv/bin/python -r tests/require
 /tmp/opendata-api-task6-venv/bin/python -m pytest -q
 ```
 
-결과: **35 passed**. 여기에는 `test_parser_outputs_validate_against_api_models`의 API, FILE, STD, LINKED representative parser document `model_validate`와 월간 snapshot provenance serialization 검증이 포함된다.
+결과: **36 passed**. 여기에는 API, FILE, STD, LINKED 대표 parser document의 Pydantic `model_validate`, 월간 snapshot provenance 직렬화, 참고문서 resource 목록·raw 다운로드 검증이 포함된다.
 
 같은 임시 환경에서 API Ruff도 확인했다.
 
