@@ -1,4 +1,4 @@
-"""Select and extract text from official portal reference-document attachments."""
+"""Select and extract bounded text from official portal reference-document attachments."""
 
 import hashlib
 import io
@@ -19,8 +19,65 @@ SUPPORTED_FORMATS = {"pdf": "PDF", "docx": "DOCX", "hwp": "HWP", "hwpx": "HWPX"}
 FILE_ID = re.compile(r"FILE_[A-Za-z0-9_]+$")
 POSITIVE_DECIMAL = re.compile(r"[1-9][0-9]*$")
 SAFE_DETAIL_ID = re.compile(r"[^\s/\\]+$")
+HWP_SECTION = re.compile(r"Section([0-9]+)$")
+HWP_SIGNATURE = b"HWP Document File" + b"\0" * 15
 HWP_PARA_HEADER = 66
 HWP_PARA_TEXT = 67
+
+# Extraction is deliberately bounded before parser libraries receive attacker-controlled content.
+MAX_INPUT_BYTES = 32 * 1024 * 1024
+MAX_PDF_PAGES = 500
+MAX_ZIP_MEMBERS = 200
+MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024
+MAX_ZIP_MEMBER_BYTES = 16 * 1024 * 1024
+MAX_ZIP_COMPRESSION_RATIO = 100
+MAX_HWP_HEADER_BYTES = 1024
+MAX_HWP_SECTIONS = 200
+MAX_HWP_STREAM_BYTES = 16 * 1024 * 1024
+MAX_HWP_DECOMPRESSED_BYTES = 64 * 1024 * 1024
+MAX_HWP_RECORD_BYTES = 4 * 1024 * 1024
+MAX_HWP_COMPRESSION_RATIO = 100
+READ_CHUNK_BYTES = 64 * 1024
+
+
+class _Malformed(ValueError):
+    pass
+
+
+class _Unsupported(ValueError):
+    pass
+
+
+class _TextAccumulator:
+    def __init__(self, max_chars):
+        self.max_chars = max_chars
+        self.parts = []
+        self.char_count = 0
+        self.truncated = False
+
+    @property
+    def full(self):
+        return self.truncated or self.char_count >= self.max_chars
+
+    def add(self, value):
+        if not value:
+            return self.full
+        prefix = "\n\n" if self.parts else ""
+        combined = prefix + value
+        remaining = self.max_chars - self.char_count
+        if len(combined) > remaining:
+            self.parts.append(combined[:remaining])
+            self.char_count = self.max_chars
+            self.truncated = True
+        else:
+            self.parts.append(combined)
+            self.char_count += len(combined)
+            if self.char_count == self.max_chars:
+                self.truncated = True
+        return self.full
+
+    def result(self):
+        return _result("TRUNCATED" if self.truncated else "EXTRACTED", "".join(self.parts))
 
 
 def detect_reference_format(name):
@@ -139,151 +196,473 @@ def _result(status, text="", error=None):
     return {"status": status, "text": text, "char_count": len(text), "error": error}
 
 
-def _bounded_text(parts, max_chars):
-    text = "\n\n".join(part for part in parts if part)
-    if len(text) > max_chars:
-        return _result("TRUNCATED", text[:max_chars])
-    return _result("EXTRACTED", text)
-
-
 def _local_name(tag):
     return tag.rsplit("}", 1)[-1]
 
 
-def _xml_paragraphs(content):
-    root = ElementTree.fromstring(content)
-    paragraphs = []
-    for paragraph in root.iter():
-        if _local_name(paragraph.tag) != "p":
-            continue
-        chunks = []
-        for node in paragraph.iter():
-            name = _local_name(node.tag)
-            if name in {"t", "text"} and node.text:
-                chunks.append(node.text)
-            elif name in {"br", "lineBreak"}:
-                chunks.append("\n")
-        value = "".join(chunks).strip()
-        if value:
-            paragraphs.append(value)
-    return paragraphs
+def _attribute(element, name):
+    for key, value in element.attrib.items():
+        if _local_name(key) == name:
+            return value
+    return None
 
 
-def _zip_xml(payload, document_format):
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        names = archive.namelist()
-        if document_format == "DOCX":
-            names = ["word/document.xml"] if "word/document.xml" in names else []
-        else:
-            names = sorted(
-                name
-                for name in names
-                if re.fullmatch(r"Contents/section[0-9]+\.xml", name, re.IGNORECASE)
-            )
-        if not names:
-            raise ValueError(f"Malformed {document_format} archive")
-        paragraphs = []
-        for name in names:
-            paragraphs.extend(_xml_paragraphs(archive.read(name)))
-        return paragraphs
+def _limited_read(stream, limit):
+    parts, total = [], 0
+    while True:
+        chunk = stream.read(min(READ_CHUNK_BYTES, limit - total + 1))
+        if not chunk:
+            return b"".join(parts)
+        total += len(chunk)
+        if total > limit:
+            raise _Malformed("resource limit")
+        parts.append(chunk)
 
 
-def extract_hwp_paragraph_stream(stream, *, compressed):
-    """Decode HWP BodyText paragraph records from one compressed or plain section stream."""
-    if not isinstance(stream, (bytes, bytearray)):
-        raise ValueError("Malformed HWP paragraph stream")
+def _zip_error(document_format):
+    raise _Malformed(f"Malformed {document_format} archive")
+
+
+def _validate_zip_info(infos, document_format):
+    if len(infos) > MAX_ZIP_MEMBERS:
+        _zip_error(document_format)
+    total = 0
+    for info in infos:
+        path = info.filename
+        if not path or path.startswith("/") or "\\" in path or ".." in path.split("/"):
+            _zip_error(document_format)
+        if info.flag_bits & 1 or info.file_size > MAX_ZIP_MEMBER_BYTES:
+            _zip_error(document_format)
+        if info.file_size and (
+            info.file_size > max(1, info.compress_size) * MAX_ZIP_COMPRESSION_RATIO
+        ):
+            _zip_error(document_format)
+        total += info.file_size
+        if total > MAX_ZIP_TOTAL_BYTES:
+            _zip_error(document_format)
+
+
+class _BoundedZipMember:
+    def __init__(self, archive, info, document_format, consumed):
+        self.document_format, self.consumed = document_format, consumed
+        self.size = 0
+        try:
+            self.stream = archive.open(info)
+        except (OSError, RuntimeError, zipfile.BadZipFile):
+            _zip_error(document_format)
+
+    def read(self, size=-1):
+        requested = READ_CHUNK_BYTES if size is None or size < 0 else min(size, READ_CHUNK_BYTES)
+        try:
+            content = self.stream.read(min(requested, MAX_ZIP_MEMBER_BYTES - self.size + 1))
+        except (OSError, RuntimeError, zipfile.BadZipFile, zlib.error):
+            _zip_error(self.document_format)
+        self.size += len(content)
+        self.consumed[0] += len(content)
+        if self.size > MAX_ZIP_MEMBER_BYTES or self.consumed[0] > MAX_ZIP_TOTAL_BYTES:
+            _zip_error(self.document_format)
+        return content
+
+    def close(self):
+        self.stream.close()
+
+
+def _zip_member(archive, name, document_format, consumed):
     try:
-        data = zlib.decompress(bytes(stream), -15) if compressed else bytes(stream)
+        info = archive.getinfo(name)
+    except KeyError:
+        _zip_error(document_format)
+    if info.flag_bits & 1:
+        _zip_error(document_format)
+    return _BoundedZipMember(archive, info, document_format, consumed)
+
+
+def _zip_read(archive, name, document_format, consumed):
+    member = _zip_member(archive, name, document_format, consumed)
+    try:
+        return _limited_read(member, MAX_ZIP_MEMBER_BYTES)
+    except _Malformed:
+        _zip_error(document_format)
+    finally:
+        member.close()
+
+
+def _xml_root(content, document_format):
+    try:
+        return ElementTree.fromstring(content)
+    except ElementTree.ParseError:
+        _zip_error(document_format)
+
+
+def _valid_docx(archive, consumed):
+    names = {info.filename for info in archive.infolist()}
+    required = {"[Content_Types].xml", "_rels/.rels", "word/document.xml"}
+    if not required.issubset(names):
+        _zip_error("DOCX")
+    content_types = _xml_root(
+        _zip_read(archive, "[Content_Types].xml", "DOCX", consumed), "DOCX"
+    )
+    relationships = _xml_root(_zip_read(archive, "_rels/.rels", "DOCX", consumed), "DOCX")
+    if (
+        _local_name(content_types.tag) != "Types"
+        or _local_name(relationships.tag) != "Relationships"
+    ):
+        _zip_error("DOCX")
+    main_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+    has_document_type = any(
+        _local_name(node.tag) == "Override"
+        and _attribute(node, "PartName") == "/word/document.xml"
+        and _attribute(node, "ContentType") == main_type
+        for node in content_types
+    )
+    has_document_relation = any(
+        _local_name(node.tag) == "Relationship"
+        and _attribute(node, "Type")
+        == "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+        and _attribute(node, "Target") in {"word/document.xml", "/word/document.xml"}
+        for node in relationships
+    )
+    if not has_document_type or not has_document_relation:
+        _zip_error("DOCX")
+
+
+def _valid_hwpx(archive, consumed):
+    names = {info.filename for info in archive.infolist()}
+    required = {"mimetype", "META-INF/manifest.xml", "Contents/content.hpf"}
+    if not required.issubset(names):
+        _zip_error("HWPX")
+    if _zip_read(archive, "mimetype", "HWPX", consumed).strip() != b"application/hwp+zip":
+        _zip_error("HWPX")
+    manifest = _xml_root(_zip_read(archive, "META-INF/manifest.xml", "HWPX", consumed), "HWPX")
+    container = _xml_root(_zip_read(archive, "Contents/content.hpf", "HWPX", consumed), "HWPX")
+    if _local_name(manifest.tag) != "manifest" or _local_name(container.tag) != "package":
+        _zip_error("HWPX")
+    section_names = (
+        name
+        for name in names
+        if re.fullmatch(r"Contents/section[0-9]+\.xml", name, re.IGNORECASE)
+    )
+    sections = sorted(section_names, key=lambda name: int(re.search(r"[0-9]+", name).group()))
+    if not sections:
+        _zip_error("HWPX")
+    manifest_sections = {
+        _attribute(node, "full-path")
+        for node in manifest.iter()
+        if _local_name(node.tag) == "file-entry"
+    }
+    if not set(sections).issubset(manifest_sections):
+        _zip_error("HWPX")
+    return sections
+
+
+def _xml_into(content, accumulator, document_format):
+    try:
+        source = content if hasattr(content, "read") else io.BytesIO(content)
+        parser = ElementTree.iterparse(source, events=("end",))
+        for _, element in parser:
+            if _local_name(element.tag) != "p":
+                continue
+            chunks = []
+            for node in element.iter():
+                name = _local_name(node.tag)
+                if name in {"t", "text"} and node.text:
+                    chunks.append(node.text)
+                elif name in {"br", "lineBreak"}:
+                    chunks.append("\n")
+            if accumulator.add("".join(chunks).strip()):
+                return
+            element.clear()
+    except ElementTree.ParseError:
+        _zip_error(document_format)
+
+
+def _zip_into(payload, document_format, accumulator):
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            infos = archive.infolist()
+            _validate_zip_info(infos, document_format)
+            consumed = [0]
+            if document_format == "DOCX":
+                _valid_docx(archive, consumed)
+                sections = ["word/document.xml"]
+            else:
+                sections = _valid_hwpx(archive, consumed)
+            for name in sections:
+                member = _zip_member(archive, name, document_format, consumed)
+                try:
+                    _xml_into(member, accumulator, document_format)
+                finally:
+                    member.close()
+                if accumulator.full:
+                    return
+    except _Malformed:
+        raise
+    except (OSError, RuntimeError, zipfile.BadZipFile, zlib.error):
+        _zip_error(document_format)
+
+
+def _decompress_hwp(stream):
+    decompressor = zlib.decompressobj(-15)
+    parts, compressed_size, decompressed_size = [], 0, 0
+    while True:
+        chunk = stream.read(min(READ_CHUNK_BYTES, MAX_HWP_STREAM_BYTES - compressed_size + 1))
+        if not chunk:
+            break
+        compressed_size += len(chunk)
+        if compressed_size > MAX_HWP_STREAM_BYTES:
+            raise _Malformed("Malformed HWP document")
+        try:
+            output = decompressor.decompress(
+                chunk, MAX_HWP_DECOMPRESSED_BYTES - decompressed_size + 1
+            )
+        except zlib.error:
+            raise _Malformed("Malformed HWP document") from None
+        decompressed_size += len(output)
+        if decompressed_size > MAX_HWP_DECOMPRESSED_BYTES:
+            raise _Malformed("Malformed HWP document")
+        if decompressed_size > max(1, compressed_size) * MAX_HWP_COMPRESSION_RATIO:
+            raise _Malformed("Malformed HWP document")
+        parts.append(output)
+        if decompressor.unconsumed_tail:
+            raise _Malformed("Malformed HWP document")
+    try:
+        output = decompressor.flush(MAX_HWP_DECOMPRESSED_BYTES - decompressed_size + 1)
     except zlib.error:
-        raise ValueError("Malformed HWP paragraph stream") from None
-    paragraphs, chunks, position = [], [], 0
+        raise _Malformed("Malformed HWP document") from None
+    decompressed_size += len(output)
+    if not decompressor.eof or decompressed_size > MAX_HWP_DECOMPRESSED_BYTES:
+        raise _Malformed("Malformed HWP document")
+    parts.append(output)
+    return b"".join(parts)
+
+
+def _hwp_stream_data(stream, compressed):
+    if compressed:
+        return _decompress_hwp(stream)
+    try:
+        return _limited_read(stream, MAX_HWP_STREAM_BYTES)
+    except (_Malformed, OSError):
+        raise _Malformed("Malformed HWP document") from None
+
+
+def _iter_hwp_paragraphs(data):
+    chunks, position = [], 0
     while position < len(data):
         if len(data) - position < 4:
-            raise ValueError("Malformed HWP paragraph stream")
+            raise _Malformed("Malformed HWP document")
         header = struct.unpack_from("<I", data, position)[0]
         position += 4
         tag, size = header & 0x3FF, header >> 20
         if size == 0xFFF:
             if len(data) - position < 4:
-                raise ValueError("Malformed HWP paragraph stream")
+                raise _Malformed("Malformed HWP document")
             size = struct.unpack_from("<I", data, position)[0]
             position += 4
-        if size > len(data) - position:
-            raise ValueError("Malformed HWP paragraph stream")
+        if size > MAX_HWP_RECORD_BYTES or size > len(data) - position:
+            raise _Malformed("Malformed HWP document")
         record = data[position : position + size]
         position += size
         if tag == HWP_PARA_HEADER:
             value = "".join(chunks).strip()
             if value:
-                paragraphs.append(value)
+                yield value
             chunks = []
         elif tag == HWP_PARA_TEXT:
             try:
                 text = record.decode("utf-16le")
             except UnicodeDecodeError:
-                raise ValueError("Malformed HWP paragraph stream") from None
+                raise _Malformed("Malformed HWP document") from None
             chunks.append("".join(char for char in text if char >= " " or char in "\n\t"))
     value = "".join(chunks).strip()
     if value:
-        paragraphs.append(value)
-    return paragraphs
+        yield value
 
 
-def _hwp_paragraphs(payload):
+class _HwpAccumulatorParser:
+    """Parse HWP records incrementally and stop as soon as the text budget is full."""
+
+    def __init__(self, accumulator):
+        self.accumulator = accumulator
+        self.buffer = bytearray()
+        self.chunks = []
+        self.chunk_chars = 0
+
+    def _emit_paragraph(self):
+        if not self.chunks:
+            return False
+        value = "".join(self.chunks).strip()
+        self.chunks, self.chunk_chars = [], 0
+        return self.accumulator.add(value)
+
+    def _add_text(self, record):
+        try:
+            value = record.decode("utf-16le")
+        except UnicodeDecodeError:
+            raise _Malformed("Malformed HWP document") from None
+        value = "".join(char for char in value if char >= " " or char in "\n\t")
+        allowed = self.accumulator.max_chars + 1 - self.chunk_chars
+        if len(value) > allowed:
+            self.chunks.append(value[:allowed])
+            self.chunk_chars += allowed
+            self._emit_paragraph()
+            return True
+        self.chunks.append(value)
+        self.chunk_chars += len(value)
+        return False
+
+    def feed(self, data):
+        self.buffer.extend(data)
+        while True:
+            if len(self.buffer) < 4:
+                return False
+            header = struct.unpack_from("<I", self.buffer)[0]
+            tag, size, header_size = header & 0x3FF, header >> 20, 4
+            if size == 0xFFF:
+                if len(self.buffer) < 8:
+                    return False
+                size = struct.unpack_from("<I", self.buffer, 4)[0]
+                header_size = 8
+            if size > MAX_HWP_RECORD_BYTES:
+                raise _Malformed("Malformed HWP document")
+            record_size = header_size + size
+            if len(self.buffer) < record_size:
+                return False
+            record = bytes(self.buffer[header_size:record_size])
+            del self.buffer[:record_size]
+            if tag == HWP_PARA_HEADER:
+                if self._emit_paragraph():
+                    return True
+            elif tag == HWP_PARA_TEXT and self._add_text(record):
+                return True
+
+    def finish(self):
+        if self.buffer:
+            raise _Malformed("Malformed HWP document")
+        return self._emit_paragraph()
+
+
+def _hwp_stream_into(stream, compressed, accumulator):
+    parser = _HwpAccumulatorParser(accumulator)
+    compressed_size = decompressed_size = 0
+    decompressor = zlib.decompressobj(-15) if compressed else None
+    while True:
+        chunk = stream.read(min(READ_CHUNK_BYTES, MAX_HWP_STREAM_BYTES - compressed_size + 1))
+        if not chunk:
+            break
+        compressed_size += len(chunk)
+        if compressed_size > MAX_HWP_STREAM_BYTES:
+            raise _Malformed("Malformed HWP document")
+        try:
+            output = decompressor.decompress(
+                chunk, MAX_HWP_DECOMPRESSED_BYTES - decompressed_size + 1
+            ) if decompressor else chunk
+        except zlib.error:
+            raise _Malformed("Malformed HWP document") from None
+        decompressed_size += len(output)
+        if (
+            decompressed_size > MAX_HWP_DECOMPRESSED_BYTES
+            or (
+                compressed
+                and decompressed_size > max(1, compressed_size) * MAX_HWP_COMPRESSION_RATIO
+            )
+        ):
+            raise _Malformed("Malformed HWP document")
+        if parser.feed(output):
+            return
+        if compressed and decompressor.unconsumed_tail:
+            raise _Malformed("Malformed HWP document")
+    if compressed:
+        try:
+            output = decompressor.flush(MAX_HWP_DECOMPRESSED_BYTES - decompressed_size + 1)
+        except zlib.error:
+            raise _Malformed("Malformed HWP document") from None
+        decompressed_size += len(output)
+        if not decompressor.eof or decompressed_size > MAX_HWP_DECOMPRESSED_BYTES:
+            raise _Malformed("Malformed HWP document")
+        if parser.feed(output):
+            return
+    parser.finish()
+
+
+def extract_hwp_paragraph_stream(stream, *, compressed):
+    """Decode one bounded HWP BodyText paragraph stream for isolated parser tests."""
+    if not isinstance(stream, (bytes, bytearray)):
+        raise ValueError("Malformed HWP paragraph stream")
+    try:
+        data = _hwp_stream_data(io.BytesIO(bytes(stream)), compressed)
+        return list(_iter_hwp_paragraphs(data))
+    except _Malformed:
+        raise ValueError("Malformed HWP paragraph stream") from None
+
+
+def _hwp_into(payload, accumulator):
     if not olefile.isOleFile(io.BytesIO(payload)):
-        raise ValueError("Malformed HWP document")
+        raise _Malformed("Malformed HWP document")
     with olefile.OleFileIO(io.BytesIO(payload)) as document:
         if not document.exists("FileHeader"):
-            raise ValueError("Malformed HWP document")
-        header = document.openstream("FileHeader").read()
-        if len(header) < 40:
-            raise ValueError("Malformed HWP document")
-        compressed = bool(struct.unpack_from("<I", header, 36)[0] & 1)
-        sections = sorted(
-            "/".join(path)
-            for path in document.listdir()
-            if len(path) == 2
-            and path[0].lower() == "bodytext"
-            and path[1].lower().startswith("section")
-        )
-        if not sections:
-            raise ValueError("Malformed HWP document")
-        paragraphs = []
-        for section in sections:
-            paragraphs.extend(
-                extract_hwp_paragraph_stream(
-                    document.openstream(section).read(), compressed=compressed
-                )
-            )
-        return paragraphs
+            raise _Malformed("Malformed HWP document")
+        try:
+            header = _limited_read(document.openstream("FileHeader"), MAX_HWP_HEADER_BYTES)
+        except (_Malformed, OSError):
+            raise _Malformed("Malformed HWP document") from None
+        if len(header) < 40 or header[:32] != HWP_SIGNATURE:
+            raise _Malformed("Malformed HWP document")
+        properties = struct.unpack_from("<I", header, 36)[0]
+        if properties & 2:
+            raise _Unsupported("Password-protected HWP document")
+        if properties & ~1:
+            raise _Unsupported("Unsupported protected HWP document")
+        sections = []
+        for path in document.listdir():
+            if len(path) != 2 or path[0] != "BodyText":
+                continue
+            match = HWP_SECTION.fullmatch(path[1])
+            if match:
+                sections.append((int(match.group(1)), "/".join(path)))
+        if not sections or len(sections) > MAX_HWP_SECTIONS:
+            raise _Malformed("Malformed HWP document")
+        for _, section in sorted(sections):
+            _hwp_stream_into(document.openstream(section), bool(properties & 1), accumulator)
+            if accumulator.full:
+                return
+
+
+def _pdf_into(payload, accumulator):
+    reader = PdfReader(io.BytesIO(payload))
+    if reader.is_encrypted:
+        raise _Unsupported("Password-protected PDF document")
+    for number, page in enumerate(reader.pages, 1):
+        if number > MAX_PDF_PAGES:
+            raise _Malformed("Malformed PDF document")
+        if accumulator.add(page.extract_text() or ""):
+            return
 
 
 def extract_reference_text(payload, name, *, max_chars):
-    """Extract bounded text, reporting malformed and unsupported documents without parser errors."""
-    if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 0:
+    """Extract bounded text with explicit, safe statuses for unsupported or malformed inputs."""
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars <= 0:
         return _result("MALFORMED", error="Invalid extraction limit")
     if not isinstance(payload, (bytes, bytearray)):
         return _result("MALFORMED", error="Reference content must be bytes")
+    if len(payload) > MAX_INPUT_BYTES:
+        return _result("MALFORMED", error="Reference content exceeds extraction limit")
     document_format = detect_reference_format(name)
     if not document_format:
         return _result("UNSUPPORTED", error="Unsupported reference format")
+    accumulator = _TextAccumulator(max_chars)
     try:
         if document_format == "PDF":
-            reader = PdfReader(io.BytesIO(payload))
-            paragraphs = [page.extract_text() or "" for page in reader.pages]
+            _pdf_into(payload, accumulator)
         elif document_format in {"DOCX", "HWPX"}:
-            paragraphs = _zip_xml(payload, document_format)
+            _zip_into(payload, document_format, accumulator)
         else:
-            paragraphs = _hwp_paragraphs(payload)
-    except ValueError as error:
-        message = str(error)
-        if message.startswith("Malformed "):
-            return _result("MALFORMED", error=message)
-        return _result("MALFORMED", error=f"Malformed {document_format} document")
-    except (ElementTree.ParseError, OSError, RuntimeError, zipfile.BadZipFile, zlib.error):
+            _hwp_into(payload, accumulator)
+    except _Unsupported as error:
+        return _result("UNSUPPORTED", error=str(error))
+    except _Malformed as error:
+        return _result("MALFORMED", error=str(error))
+    except Exception:
         if document_format in {"DOCX", "HWPX"}:
             return _result("MALFORMED", error=f"Malformed {document_format} archive")
         return _result("MALFORMED", error=f"Malformed {document_format} document")
-    except Exception:
-        return _result("MALFORMED", error=f"Malformed {document_format} document")
-    return _bounded_text(paragraphs, max_chars)
+    return accumulator.result()

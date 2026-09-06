@@ -2,6 +2,7 @@ import io
 import struct
 import zipfile
 
+import opendata_collector.reference_docs as reference_docs
 from opendata_collector.reference_docs import (
     extract_hwp_paragraph_stream,
     extract_reference_text,
@@ -129,12 +130,17 @@ def _zip(entries):
 def test_extracts_docx_and_hwpx_paragraphs():
     docx = _zip(
         {
-            "word/document.xml": b'<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>one</w:t></w:r></w:p><w:p><w:r><w:t>two</w:t></w:r></w:p></w:body></w:document>'
+            "[Content_Types].xml": b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+            "_rels/.rels": b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+            "word/document.xml": b'<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>one</w:t></w:r></w:p><w:p><w:r><w:t>two</w:t></w:r></w:p></w:body></w:document>',
         }
     )
     hwpx = _zip(
         {
-            "Contents/section0.xml": b'<hp:section xmlns:hp="hp"><hp:p><hp:run><hp:t>hana</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>dul</hp:t></hp:run></hp:p></hp:section>'
+            "mimetype": b"application/hwp+zip",
+            "META-INF/manifest.xml": b'<manifest:manifest xmlns:manifest="manifest"><manifest:file-entry manifest:full-path="Contents/section0.xml"/></manifest:manifest>',
+            "Contents/content.hpf": b"<package/>",
+            "Contents/section0.xml": b'<hp:section xmlns:hp="hp"><hp:p><hp:run><hp:t>hana</hp:t></hp:run></hp:p><hp:p><hp:run><hp:t>dul</hp:t></hp:run></hp:p></hp:section>',
         }
     )
 
@@ -184,3 +190,131 @@ def test_malformed_hwp_stream_returns_explicit_malformed_result():
 
     assert result["status"] == "MALFORMED"
     assert result["error"] == "Malformed HWP document"
+
+
+
+def _valid_docx(document=b'<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>'):
+    return _zip(
+        {
+            "[Content_Types].xml": b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+            "_rels/.rels": b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+            "word/document.xml": document,
+        }
+    )
+
+
+def test_rejects_generic_zip_payloads_that_only_mimic_docx_or_hwpx_members():
+    assert extract_reference_text(
+        _zip({"word/document.xml": b"<document><p>not a DOCX package</p></document>"}),
+        "guide.docx", max_chars=100,
+    )["status"] == "MALFORMED"
+    assert extract_reference_text(
+        _zip({"Contents/section0.xml": b"<section><p>not a HWPX package</p></section>"}),
+        "guide.hwpx", max_chars=100,
+    )["status"] == "MALFORMED"
+
+
+def test_rejects_non_positive_character_limits():
+    for limit in (0, -1, True):
+        result = extract_reference_text(_valid_docx(), "guide.docx", max_chars=limit)
+        assert result == {"status": "MALFORMED", "text": "", "char_count": 0, "error": "Invalid extraction limit"}
+
+
+def test_rejects_zip_member_limit_and_suspicious_compression_ratio(monkeypatch):
+    monkeypatch.setattr(reference_docs, "MAX_ZIP_MEMBER_BYTES", 4)
+    result = extract_reference_text(_valid_docx(b"<document><p>large</p></document>"), "guide.docx", max_chars=100)
+    assert result == {"status": "MALFORMED", "text": "", "char_count": 0, "error": "Malformed DOCX archive"}
+    monkeypatch.setattr(reference_docs, "MAX_ZIP_MEMBER_BYTES", 1024 * 1024)
+    monkeypatch.setattr(reference_docs, "MAX_ZIP_COMPRESSION_RATIO", 1)
+    result = extract_reference_text(_valid_docx(b"x" * 4096), "guide.docx", max_chars=100)
+    assert result["status"] == "MALFORMED"
+    assert result["error"] == "Malformed DOCX archive"
+
+
+def test_pdf_stops_after_output_budget_and_rejects_excess_pages(monkeypatch):
+    calls = []
+
+    class Page:
+        def __init__(self, value): self.value = value
+        def extract_text(self):
+            calls.append(self.value)
+            if self.value == "later":
+                raise AssertionError("output cap did not stop PDF extraction")
+            return self.value
+
+    class Reader:
+        is_encrypted = False
+        pages = [Page("one"), Page("later")]
+        def __init__(self, *_): pass
+
+    monkeypatch.setattr(reference_docs, "PdfReader", Reader)
+    assert extract_reference_text(b"small", "guide.pdf", max_chars=3)["status"] == "TRUNCATED"
+    assert calls == ["one"]
+    monkeypatch.setattr(reference_docs, "MAX_PDF_PAGES", 1)
+    result = extract_reference_text(b"small", "guide.pdf", max_chars=100)
+    assert result["status"] == "MALFORMED"
+    assert result["error"] == "Malformed PDF document"
+
+
+class _Stream(io.BytesIO):
+    pass
+
+
+class _FakeOle:
+    def __init__(self, streams): self.streams = streams
+    def __enter__(self): return self
+    def __exit__(self, *_): return None
+    def exists(self, name): return name in self.streams
+    def openstream(self, name): return _Stream(self.streams[name])
+    def listdir(self): return [name.split("/") for name in self.streams]
+
+
+def _hwp_header(*, compressed=False, encrypted=False, valid=True):
+    signature = b"HWP Document File" + b"\0" * 15 if valid else b"not an HWP header" + b"\0" * 15
+    flags = (1 if compressed else 0) | (2 if encrypted else 0)
+    return signature + b"\0" * 4 + struct.pack("<I", flags) + b"\0" * 216
+
+
+def _fake_hwp(monkeypatch, streams):
+    monkeypatch.setattr(reference_docs.olefile, "isOleFile", lambda *_: True)
+    monkeypatch.setattr(reference_docs.olefile, "OleFileIO", lambda *_: _FakeOle(streams))
+
+
+def test_hwp_public_extraction_validates_signature_encryption_and_numeric_sections(monkeypatch):
+    raw_two = _record(66) + _record(67, "two".encode("utf-16le"))
+    raw_ten = _record(66) + _record(67, "ten".encode("utf-16le"))
+    _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(), "BodyText/Section10": raw_ten, "BodyText/Section2": raw_two})
+    result = extract_reference_text(b"ole", "guide.hwp", max_chars=100)
+    assert result["text"] == "two\n\nten"
+    _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(valid=False), "BodyText/Section0": raw_two})
+    assert extract_reference_text(b"ole", "guide.hwp", max_chars=100) == {"status": "MALFORMED", "text": "", "char_count": 0, "error": "Malformed HWP document"}
+    _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(encrypted=True), "BodyText/Section0": raw_two})
+    assert extract_reference_text(b"ole", "guide.hwp", max_chars=100) == {"status": "UNSUPPORTED", "text": "", "char_count": 0, "error": "Password-protected HWP document"}
+
+
+def test_hwp_public_extraction_supports_compressed_section_and_ignores_nonstandard_sections(monkeypatch):
+    import zlib
+    raw = _record(66) + _record(67, "compressed".encode("utf-16le"))
+    compressor = zlib.compressobj(wbits=-15)
+    packed = compressor.compress(raw) + compressor.flush()
+    _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(compressed=True), "BodyText/Section0": packed, "BodyText/SectionNotes": raw})
+    result = extract_reference_text(b"ole", "guide.hwp", max_chars=100)
+    assert result["status"] == "EXTRACTED"
+    assert result["text"] == "compressed"
+
+
+
+def test_rejects_encrypted_zip_member_before_reading_it():
+    payload = bytearray(_valid_docx())
+    local = payload.find(b"PK\x03\x04")
+    central = payload.find(b"PK\x01\x02")
+    assert local >= 0 and central >= 0
+    payload[local + 6] |= 1
+    payload[central + 8] |= 1
+    result = extract_reference_text(bytes(payload), "guide.docx", max_chars=100)
+    assert result == {
+        "status": "MALFORMED",
+        "text": "",
+        "char_count": 0,
+        "error": "Malformed DOCX archive",
+    }
