@@ -294,7 +294,6 @@ def test_file_and_catalog_models_preserve_parse_status():
     assert catalog_value["parser_version"] == "1"
 
 
-
 def test_parsed_api_document_construct_serializes_monthly_snapshot_fields():
     output = normalize_catalog(
         ParseInput(
@@ -308,7 +307,13 @@ def test_parsed_api_document_construct_serializes_monthly_snapshot_fields():
                 "detail_status": "completed",
                 "detail_errors": [],
             },
-            detail={"metadata": {}, "schema_org": [], "api_specs": [], "attachments": [], "tables": []},
+            detail={
+                "metadata": {},
+                "schema_org": [],
+                "api_specs": [],
+                "attachments": [],
+                "tables": [],
+            },
             source_records=[
                 {
                     "source": "monthly_snapshot",
@@ -335,7 +340,9 @@ def test_parsed_api_document_construct_serializes_monthly_snapshot_fields():
 
     # Beanie document validation requires an initialized collection; construct preserves
     # this concrete parser document so its Pydantic serialization can be asserted here.
-    document = ParsedAPIInfo.model_construct(**output.document).model_dump(mode="json")
+    document = ParsedAPIInfo.model_construct(**output.document).model_dump(
+        mode="json"
+    )
 
     assert document["monthly_snapshot"] == output.document["monthly_snapshot"]
     assert document["monthly_snapshot"]["관리부서 전화번호"] == "02-1111-2222"
@@ -346,7 +353,10 @@ def test_parsed_api_document_construct_serializes_monthly_snapshot_fields():
     assert document["api_type"] == "REST"
     assert document["api_confirm_for_dev"] == "Y"
     assert document["api_confirm_for_prod"] == "N"
-    assert document["contact"] == {"department": "monthly department", "phone": "02-1111-2222"}
+    assert document["contact"] == {
+        "department": "monthly department",
+        "phone": "02-1111-2222",
+    }
     assert document["view_count"] == 9
     assert document["provision_type"] == "FILE"
     assert document["traffic_limit"] == "1,000"

@@ -183,7 +183,7 @@ uv pip install --python /tmp/opendata-api-task6-venv/bin/python -r tests/require
 /tmp/opendata-api-task6-venv/bin/python -m ruff format --check .
 ```
 
-결과: 현재 API 전체에는 **143개 Ruff lint 위반(50 files)**이 있고, format check는 `src/recommend_system/milvus_init.py`와 `tests/test_schema_compat.py` 두 파일을 재포맷 대상으로 표시했다. 이 문서 작업과 무관한 기존 상태이므로 수정하지 않았다.
+결과: 현재 API 전체에는 **143개 Ruff lint 위반(50 files)**이 있다. 당시 전체 format check는 `src/recommend_system/milvus_init.py`와 feature-range 파일 `tests/test_schema_compat.py`를 재포맷 대상으로 표시했다. 후자는 이 검토에서 `ruff format`으로 정리했고, 해당 파일만의 format check는 통과했다. 전체 lint baseline은 별개이며, `src/models/open_data.py`의 기존 `RUF012` 16건과 `tests/test_schema_compat.py`의 기존 `UP017` 2건 때문에 두 파일의 scoped `ruff check`도 18건을 보고한다. 이 범위에서는 format gate만 충족했고 lint clean이라고 주장하지 않는다.
 
 ### 선택: 격리 MongoDB 및 공개 메타데이터 확인
 

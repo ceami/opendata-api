@@ -107,7 +107,7 @@ uv run --env-file ../../.env.dev opendata-collect parse
 # 5. 이 결과를 입력으로 하는 AI 단계는 수집기 밖에서 별도로 실행한다.
 ```
 
-월간 CSV는 전체 바이트·인코딩·필수 헤더·유형·목록 ID·상세 URL을 먼저 검증한 뒤에만 공개한다. 원본 CSV는 SHA-256 주소의 gzip GridFS blob으로 `portal_raw.files/chunks`에 저장하고, provenance(`source`, `raw_id`, `raw_sha256`, record hash, 원본 행)는 `portal_snapshot_runs`와 `portal_snapshot_records`에 남긴다. 완료 generation만 현재 generation으로 읽히며, 보고서에는 현재 live `portal_catalog`과의 `matched`·`snapshot_only`·`current_only` 대조 건수가 포함된다. 실패하거나 지나치게 작은 CSV는 이전 완료 generation을 바꾸지 않는다. 기본 CSV/로컬 replay 한도는 **256 MiB**이고 `--max-bytes`로 더 낮출 수 있다. 이 명령은 `portal_catalog`, 기존 projection, AI 문서를 쓰지 않는다.
+월간 CSV는 전체 바이트·인코딩·필수 헤더·유형·목록 ID·상세 URL을 먼저 검증한 뒤에만 공개한다. 원본 CSV는 SHA-256 주소의 gzip GridFS blob으로 `portal_raw.files/chunks`에 저장하고, provenance(`source`, `raw_id`, `raw_sha256`, record hash, 원본 행)는 `portal_snapshot_runs`와 `portal_snapshot_records`에 남긴다. 완료 generation만 현재 generation으로 읽히며, 보고서의 `matched`·`snapshot_only`·`current_only` 대조는 **활성 API/FILE/STD** live `portal_catalog`만을 모집단으로 한다. 비활성 레코드와 LINKED 유형은 이 대조에서 제외된다. 실패하거나 지나치게 작은 CSV는 이전 완료 generation을 바꾸지 않는다. 기본 CSV/로컬 replay 한도는 **256 MiB**이고 `--max-bytes`로 더 낮출 수 있다. 이 명령은 `portal_catalog`, 기존 projection, AI 문서를 쓰지 않는다.
 
 `parse`는 최신 완료 `portal_snapshot_runs`의 같은 카탈로그 행을 live 원천 뒤에 추가한다. 따라서 live 목록·상세의 값이 우선하고 빈 값만 월간 행으로 보완된다. parsed 문서에는 원본 월간 열(`monthly_snapshot`)과 `snapshot_run_id`, `snapshot_source`, `snapshot_raw_sha256`가 함께 남는다.
 
