@@ -82,6 +82,33 @@ uv run opendata-collect status RUN_ID
 
 공식 API는 동일 목록키에 여러 오퍼레이션이나 파일 레코드를 반환할 수 있으므로 `id`와 `operation_seq`를 함께 사용해 원천 레코드를 구분합니다. 목록 ID만으로 덮어쓰지 않습니다. 공식 API 전체 조회와 공개 포털은 공개 시점/대상이 다를 수 있으므로 같은 전체 건수라고 가정하지 않습니다.
 
+## AI 처리 전 파싱
+
+수집이 끝난 뒤 별도 `parse` 명령으로 저장된 원천을 정규화합니다. 이 단계는 네트워크나 AI 서비스를 호출하지 않고 `portal_catalog`, `portal_source_records`, GridFS 상세 JSON 및 현재 리소스만 읽습니다.
+
+```bash
+# FILE/API/STD/LINKED 전체 파싱
+uv run --env-file ../../.env.dev opendata-collect parse
+
+# 선택 유형만 최대 1,000건 파싱
+uv run --env-file ../../.env.dev opendata-collect parse \
+  --types API FILE --limit 1000
+
+# 원천이 같아도 다시 파싱
+uv run --env-file ../../.env.dev opendata-collect parse --force
+```
+
+파싱 결과는 `list_id`로 upsert합니다. 원천 필드·상세 JSON·활성 리소스 ID와 parser version으로 fingerprint를 계산하여 변경이 없는 문서는 건너뜁니다. 원천이 바뀌거나 parser version이 올라가면 다시 파싱합니다. 기존 중복 `parsed_api_info`/`parsed_file_info` 문서는 해당 ID를 처리할 때 최신 `parsed_at`의 `_id` 하나를 유지합니다.
+
+| 원천 유형 | 파싱 결과 |
+| --- | --- |
+| API | `parsed_api_info`: OpenAPI 2/3 endpoint·요청·응답·예시. 명세가 없으면 operation 표, 마지막으로 공식 원천 record를 사용 |
+| FILE | `parsed_file_info`: 배포 링크, 컬럼, 과거 버전과 상세, 포함된 OpenAPI endpoint |
+| STD | `parsed_std_info`: 표준 요약·컬럼·멤버 수. 기관별 자료는 `parsed_std_members`에 분리 |
+| LINKED | `parsed_linked_info`: schema.org와 DCAT의 기관·라이선스·접근 URL |
+
+`portal_catalog.parse_status`는 `completed`, `partial`, `failed` 중 하나이며 오류는 `parse_errors`에 저장합니다. 상세 수집이 부분 성공한 자료도 가능한 필드를 저장하고 `partial`로 표시합니다. 파서 자체가 실패하면 기존 정상 parsed 문서는 유지하고 상태만 `failed`로 기록합니다. API/FILE의 기존 원천 문서에는 `is_parsed=Y` 또는 `ERROR`와 `parsed_at`을 함께 갱신합니다. `generated_*` 컬렉션은 이 단계에서 읽거나 수정하지 않습니다. 부분 결과나 실패가 하나라도 있으면 명령 결과는 `incomplete`이고 종료코드는 2입니다.
+
 수집 속도 기본값은 요청 간 최소 0.5초, timeout 30초, 일시적 실패에 최초 요청 + 최대 3회 재시도입니다. `--interval`, `--timeout`, `--retries`, `--page-size`로 조정합니다. 페이지 크기 기본값은 100이며 응답이 요청 크기/페이지를 다르게 반환하면 중단합니다. 표준 구성 데이터는 포털이 정한 별도 페이지 크기를 사용합니다.
 
 ## 완료 판정과 오류 복구
@@ -111,9 +138,12 @@ uv run opendata-collect status RUN_ID
 | `portal_resources` | 메타데이터 URL·종류·조회시각·원본 SHA256 |
 | `portal_raw.files/chunks` | gzip 압축한 원본 및 전체 파싱 JSON. 큰 명세의 MongoDB 16MB 문서 제한 회피 |
 | `portal_locks` | 동시 실행 제어 |
-| `open_data_info`, `open_file_info` | 기존 API와 연결되는 요약 projection |
+| `open_data_info`, `open_file_info` | 기존 API와 연결되는 요약 projection 및 파싱 상태 |
+| `parsed_api_info`, `parsed_file_info` | AI 이전 API/FILE 정규화 결과 |
+| `parsed_std_info`, `parsed_linked_info` | AI 이전 STD/LINKED 정규화 결과 |
+| `parsed_std_members` | 표준데이터셋의 기관별 구성 자료; 현재/삭제 이력 포함 |
 
-FILE/API 상세 수집이 성공한 경우 기존 컬렉션에 `list_id`로 upsert합니다. 기존 `_id`, `is_parsed`, `parsed_at`, AI 문서 컬렉션은 유지합니다. 출처에 없는 Y/N 값은 `None`으로 저장하며 기존 API 모델도 이를 허용합니다. STD/LINKED는 `portal_catalog`에 저장하며 기존 UI의 표시 유형 추가는 이 수집기 범위 밖입니다. Elasticsearch 재색인은 기존 API의 별도 색인 명령을 사용합니다.
+FILE/API 상세 수집이 성공한 경우 기존 컬렉션에 `list_id`로 upsert합니다. 기존 `_id`, `is_parsed`, `parsed_at`, AI 문서 컬렉션은 유지합니다. 출처에 없는 Y/N 값은 `None`으로 저장하며 기존 API 모델도 이를 허용합니다. STD/LINKED 원천 요약은 `portal_catalog`에 저장하고 파싱 결과는 각 `parsed_*` 컬렉션에 저장합니다. 기존 UI의 표시 유형 추가는 이 수집기 범위 밖입니다. Elasticsearch 재색인은 기존 API의 별도 색인 명령을 사용합니다.
 
 
 새로 적재되는 FILE projection은 `data_type="FILE"`과 실제 `data_format`을 분리합니다. 기존 API 모델에는 수집 출처·시각·연락처·첨부·오퍼레이션 필드가 선언되어 있어 상세 응답에서 보존됩니다. 네 유형의 공통 메타데이터, 원천 레코드 및 GridFS 원문은 API 서버의 `/api/v1/catalog` 경로로 조회할 수 있습니다.
@@ -145,6 +175,6 @@ uv run ruff format --check .
 MONGO_TEST_URL=mongodb://127.0.0.1:27017 uv run pytest tests/test_mongo_integration.py
 ```
 
-단위 테스트는 HTTP 경계의 응답만 대체하고 실제 페이지 파서·페이지 검증·수집 상태 전이·DB 적재 로직을 실행합니다. 기본 실행에서는 실제 Mongo 통합 테스트 3개를 건너뜁니다. `MONGO_TEST_URL`을 지정하면 UUID로 생성한 검증 DB에서 테스트하고 해당 DB만 삭제합니다. Mongo 동작은 mongomock/GridFS와 실제 MongoDB에서 검증하며 결과는 [VALIDATION.md](VALIDATION.md)에 기록합니다. 공개 HTML fixture는 원본 페이지의 필요한 부분을 발췌했고 출처는 `tests/fixtures/README.md`에 기록합니다.
+단위 테스트는 HTTP 경계의 응답만 대체하고 실제 페이지 파서·페이지 검증·수집 상태 전이·DB 적재 로직을 실행합니다. 기본 실행에서는 실제 Mongo 통합 테스트를 건너뜁니다. `MONGO_TEST_URL`을 지정하면 UUID로 생성한 검증 DB에서 테스트하고 해당 DB만 삭제합니다. Mongo 동작은 mongomock/GridFS와 실제 MongoDB에서 검증하며 결과는 [VALIDATION.md](VALIDATION.md)에 기록합니다. 공개 HTML fixture는 원본 페이지의 필요한 부분을 발췌했고 출처는 `tests/fixtures/README.md`에 기록합니다.
 
 공식 제공 근거: [목록 조회 API 명세](https://infuser.odcloud.kr/oas/15077093), [공공데이터포털 목록](https://www.data.go.kr/tcs/dss/selectDataSetList.do), [목록개방현황](https://www.data.go.kr/data/15062804/fileData.do). 목록개방현황 CSV는 시점 스냅샷이고 다운로드 경로에 동적 처리도 있어 현재 수집기의 자동 원천으로 사용하지 않습니다.

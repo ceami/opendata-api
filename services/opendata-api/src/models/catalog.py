@@ -58,6 +58,11 @@ class PortalCatalogFields(BaseModel):
     representative_source_id: str | None = None
     api_spec_count: int = 0
     attachment_count: int = 0
+    parse_status: Literal["completed", "partial", "failed"] | None = None
+    parse_errors: list[dict[str, Any]] = Field(default_factory=list)
+    parsed_at: datetime | None = None
+    parser_version: str | None = None
+    source_fingerprint: str | None = None
 
     @model_validator(mode="before")
     @classmethod

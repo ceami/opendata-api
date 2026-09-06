@@ -164,3 +164,31 @@ def test_real_mongo_refresh_updates_current_view_and_keeps_resource_history(real
     assert (
         gzip.decompress(real_store.raw.get(active_resources[0]["raw_id"]).read()) == b"revision-2"
     )
+
+
+def test_real_mongo_collect_then_parse_all_catalog_types(real_store):
+    from opendata_collector.parse_pipeline import ParsePipeline
+    from opendata_collector.parse_store import ParseStore
+
+    pages = {
+        (kind, 1): ([item(number, kind)], 1)
+        for number, kind in enumerate(("API", "FILE", "STD", "LINKED"), 1)
+    }
+    source = Source(pages)
+    real_store.db.generated_api_docs.insert_one(
+        {"_id": "sentinel", "list_id": 1, "markdown": "keep"}
+    )
+
+    collected = Pipeline(source, real_store, Details()).run(types=["API", "FILE", "STD", "LINKED"])
+    parsed = ParsePipeline(ParseStore(real_store.db)).run(["API", "FILE", "STD", "LINKED"])
+    repeated = ParsePipeline(ParseStore(real_store.db)).run(["API", "FILE", "STD", "LINKED"])
+
+    assert collected["status"] == "completed"
+    assert parsed["status"] == "completed"
+    assert parsed["parsed"] == 4
+    assert repeated["skipped"] == 4
+    assert real_store.db.parsed_api_info.count_documents({}) == 1
+    assert real_store.db.parsed_file_info.count_documents({}) == 1
+    assert real_store.db.parsed_std_info.count_documents({}) == 1
+    assert real_store.db.parsed_linked_info.count_documents({}) == 1
+    assert real_store.db.generated_api_docs.find_one({"_id": "sentinel"})["markdown"] == "keep"

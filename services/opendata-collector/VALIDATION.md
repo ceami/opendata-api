@@ -116,3 +116,27 @@ API_SCHEMA_TEST_MONGO_URL=mongodb://127.0.0.1:27017 \
 ## 유형별 최대 10,000건 실수집
 
 검증 기간: 2026-09-04 ~ 2026-09-06 UTC. FILE/API/LINKED 각각 10,000건과 STD 전체 300그룹을 격리 MongoDB에 적재하고, 상세 JSON 30,258건과 GridFS blob 171,312건의 참조·복원을 전수 검사했다. 대량 표본에서 발견한 LINKED 교차 페이지 중복, Swagger 리터럴 두 패턴, DCAT `dct:conformsTo`, HTTP OpenAPI 명세 URL을 회귀 테스트와 함께 수정했다. 상세 결과와 남은 포털 HTTP 500은 [유형별 최대 10,000건 실수집 리뷰](LIVE_SAMPLE_REVIEW_10000_2026-09-06.md)에 기록했다.
+
+## AI 처리 전 파싱 파이프라인
+
+검증일: 2026-09-06 UTC. 수집된 Mongo/GridFS 원천만 사용해 FILE/API/STD/LINKED를 `parsed_*` 컬렉션으로 변환하는 결정론적 단계를 추가했다.
+
+- OpenAPI 2/3의 header/query/path/cookie/body, response, example과 로컬 `$ref`를 파싱하며 재귀 참조는 유한한 표식으로 남긴다.
+- Swagger가 없는 API는 수집된 operation 표를 사용하고, 표도 없으면 공식 원천 record의 endpoint와 파라미터를 사용한다.
+- FILE 배포·컬럼·이력·버전 상세와 포함된 OpenAPI를 보존한다.
+- STD 요약과 기관별 멤버를 분리 저장하고 사라진 멤버를 비활성화한다. LINKED는 schema.org와 DCAT의 publisher, license, access URL을 합친다.
+- 안정적인 source fingerprint와 parser version이 같은 문서는 건너뛰며 `--force`로 재실행할 수 있다.
+- 기존 parsed 중복은 해당 `list_id` 갱신 시 최신 문서 ID 하나로 정리하고 `generated_*` 문서는 변경하지 않는다.
+- 인메모리 단위 테스트와 UUID 임시 DB를 사용한 실제 Mongo collect→parse 통합 테스트를 실행했다. 최종 결과는 collector 인메모리 143개 통과·실DB 5개 통과, API 인메모리 33개 통과·실DB 33개 통과이며 테스트 DB는 종료 시 삭제됐다.
+- 기존 10,000건 격리 수집본의 유형별 실제 자료를 임시 DB에서 파싱해 API endpoint 2개, FILE endpoint 54개, LINKED 접근 URL 2개를 확인했다. 별도 STD 표본에서는 요약 멤버 수 1개와 `parsed_std_members` 1개 및 상세 metadata를 확인했다.
+
+실행 명령:
+
+```bash
+uv run opendata-collect parse --types FILE API STD LINKED
+uv run pytest tests/test_parse_normalizers.py tests/test_parse_pipeline.py tests/test_cli.py
+MONGO_TEST_URL=mongodb://127.0.0.1:27017 \
+  uv run pytest tests/test_mongo_integration.py
+```
+
+이 검증은 기존 운영 `open_data` 문서를 일괄 변환하지 않았다. 실제 운영 파싱은 위 `parse` 명령을 별도로 실행하며 `--limit`으로 먼저 범위를 제한할 수 있다.

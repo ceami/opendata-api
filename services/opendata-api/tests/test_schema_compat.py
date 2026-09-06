@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 import pytest
+from opendata_collector.parse_normalizers import ParseInput, normalize_catalog
 from opendata_collector.projection import project_legacy
 
 from api.v1.application.catalog.catalog_service import CatalogService
@@ -11,7 +12,16 @@ from api.v1.domain.open_data.entities import (
     RankedItem,
     UnifiedDataItem,
 )
-from models import OpenAPIInfo, OpenFileInfo
+from models import (
+    OpenAPIInfo,
+    OpenFileInfo,
+    ParsedAPIInfo,
+    ParsedFileInfo,
+    ParsedLinkedInfo,
+    ParsedSTDInfo,
+    ParsedSTDMember,
+    PortalCatalog,
+)
 
 NOW = datetime(2026, 9, 3, tzinfo=timezone.utc)
 
@@ -134,3 +144,105 @@ async def test_old_api_kind_field_does_not_break_the_api_collection(database):
     assert (await database.open_data_info.find_one({"_id": "old-api"}))[
         "data_type"
     ] == "OPENAPI"
+
+
+@pytest.mark.parametrize(
+    "kind,model",
+    [
+        ("API", ParsedAPIInfo),
+        ("FILE", ParsedFileInfo),
+        ("STD", ParsedSTDInfo),
+        ("LINKED", ParsedLinkedInfo),
+    ],
+)
+def test_parser_outputs_validate_against_api_models(kind, model):
+    detail = {
+        "metadata": {"설명": ["description"]},
+        "schema_org": [],
+        "api_specs": [],
+        "attachments": [],
+        "tables": [],
+        "standard_members": {
+            "total": 0,
+            "collected_count": 0,
+            "items": [],
+        },
+        "detail_popups": [],
+        "detail_format": "TABLE",
+    }
+    value = normalize_catalog(
+        ParseInput(
+            catalog={
+                "_id": f"{kind}:7",
+                "data_type": kind,
+                "list_id": 7,
+                "title": "public",
+                "summary": {},
+                "detail_status": "completed",
+                "detail_errors": [],
+            },
+            detail=detail,
+            source_fingerprint="fingerprint",
+        )
+    )
+
+    document = model.model_validate(value.document)
+
+    assert document.source_catalog_id == f"{kind}:7"
+    assert document.parser_version == "1"
+    assert document.parse_status == "completed"
+
+
+def test_standard_member_output_validates_against_api_model():
+    member = {
+        "_id": "STD:7:a",
+        "source_catalog_id": "STD:7",
+        "list_id": 7,
+        "public_data_detail_pk": "a",
+        "title": "member",
+        "provider": "Agency",
+        "registered_at": "2026-09-01",
+        "source_record": {"provider": "Agency"},
+        "detail_status": "completed",
+        "metadata": {},
+        "columns": [],
+        "distributions": [],
+        "source_fingerprint": "fingerprint",
+        "parser_version": "1",
+        "parsed_at": NOW,
+        "is_active": True,
+    }
+
+    document = ParsedSTDMember.model_validate(member)
+
+    assert document.public_data_detail_pk == "a"
+    assert document.provider == "Agency"
+    assert document.source_record == {"provider": "Agency"}
+    assert document.detail_status == "completed"
+    assert document.is_active is True
+
+
+def test_file_and_catalog_models_preserve_parse_status():
+    file_value = OpenFileInfo.model_validate(
+        {**projected(), "is_parsed": "Y", "parsed_at": NOW}
+    ).model_dump()
+    catalog_value = PortalCatalog.model_validate(
+        {
+            "_id": "FILE:7",
+            "data_type": "FILE",
+            "list_id": 7,
+            "title": "public",
+            "detail_url": "https://www.data.go.kr/data/7/fileData.do",
+            "parse_status": "partial",
+            "parse_errors": [{"kind": "dcat"}],
+            "parsed_at": NOW,
+            "parser_version": "1",
+            "source_fingerprint": "fingerprint",
+        }
+    ).model_dump()
+
+    assert file_value["is_parsed"] == "Y"
+    assert file_value["parsed_at"] == NOW
+    assert catalog_value["parse_status"] == "partial"
+    assert catalog_value["parse_errors"] == [{"kind": "dcat"}]
+    assert catalog_value["parser_version"] == "1"

@@ -27,8 +27,10 @@ class ParsedEndpoint(BaseModel):
     method: str
     request_schema: dict | None = Field(default=None)
     response_schemas: dict | None = Field(default=None)
-    example_response_data: str | None = Field(default=None)
+    example_response_data: Any | None = Field(default=None)
     example_request_string: str | None = Field(default=None)
+    name: str | None = None
+    raw_tables: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class OpenFileInfo(Document, CollectedMetadata):
@@ -71,6 +73,8 @@ class OpenFileInfo(Document, CollectedMetadata):
     title: str | None
     update_cycle: str | None
     updated_at: datetime | None = None
+    is_parsed: Literal["Y", "N", "ERROR"] = "N"
+    parsed_at: datetime | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -200,7 +204,17 @@ class OpenAPIInfo(Document, CollectedMetadata):
         ]
 
 
-class ParsedAPIInfo(Document):
+class ParsedMetadata(BaseModel):
+    """Revision and status metadata shared by deterministic parser outputs."""
+
+    source_catalog_id: str | None = None
+    source_fingerprint: str | None = None
+    parser_version: str | None = None
+    parse_status: Literal["completed", "partial", "failed"] | None = None
+    parse_errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ParsedAPIInfo(Document, ParsedMetadata):
     """OpenDataInfo를 파서를 거쳐서 만들게 되는 최종 생성물"""
 
     id: str = Field(default_factory=lambda: "")
@@ -209,7 +223,7 @@ class ParsedAPIInfo(Document):
     api_type: str
     category: str
     copyright: str
-    created_at: datetime
+    created_at: datetime | None = None
     data_format: str
     data_type: str
     department: str
@@ -224,7 +238,7 @@ class ParsedAPIInfo(Document):
     third_party_copyright: str
     title: str
     title_en: str
-    update_at: datetime
+    update_at: datetime | None = None
     use_prmisn_ennc: str
 
     class Settings:
@@ -236,7 +250,7 @@ class ParsedAPIInfo(Document):
         ]
 
 
-class ParsedFileInfo(Document):
+class ParsedFileInfo(Document, ParsedMetadata):
     """OpenFileInfo를 파서를 거쳐서 만들게 되는 최종 생성물"""
 
     id: str = Field(default_factory=lambda: "")
@@ -244,7 +258,7 @@ class ParsedFileInfo(Document):
     api_confirm_for_prod: str | None = None
     api_type: str
     category: str
-    created_at: datetime
+    created_at: datetime | None = None
     data_format: str
     data_type: str
     department: str
@@ -261,6 +275,11 @@ class ParsedFileInfo(Document):
     title_en: str | None = None
     update_at: datetime | None = None
     use_prmisn_ennc: str
+    copyright: str = ""
+    distributions: list[dict[str, Any]] = Field(default_factory=list)
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     class Settings:
         name = "parsed_file_info"
@@ -269,6 +288,98 @@ class ParsedFileInfo(Document):
                 ("title", pymongo.TEXT),
             ],
         ]
+
+
+class ParsedSTDInfo(Document, ParsedMetadata):
+    """Parsed standard dataset summary; member rows live separately."""
+
+    id: str = Field(default_factory=lambda: "")
+    list_id: int
+    data_type: Literal["STD"] = "STD"
+    title: str = ""
+    description: str = ""
+    department: str = ""
+    category: str = ""
+    data_format: str = ""
+    created_at: datetime | str | None = None
+    update_at: datetime | str | None = None
+    pricing: str = ""
+    copyright: str = ""
+    third_party_copyright: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    request_cnt: int = 0
+    title_en: str = ""
+    register_status: str = ""
+    use_prmisn_ennc: str = ""
+    member_count: int = 0
+    collected_member_count: int = 0
+    parsed_member_count: int = 0
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    parsed_at: datetime
+
+    class Settings:
+        name = "parsed_std_info"
+        indexes = ["list_id", "source_catalog_id"]
+
+
+class ParsedLinkedInfo(Document, ParsedMetadata):
+    """Parsed linked-data metadata from schema.org and DCAT resources."""
+
+    id: str = Field(default_factory=lambda: "")
+    list_id: int
+    data_type: Literal["LINKED"] = "LINKED"
+    title: str = ""
+    description: str = ""
+    department: str = ""
+    category: str = ""
+    data_format: str = ""
+    created_at: datetime | str | None = None
+    update_at: datetime | str | None = None
+    pricing: str = ""
+    copyright: str = ""
+    third_party_copyright: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    request_cnt: int = 0
+    title_en: str = ""
+    register_status: str = ""
+    use_prmisn_ennc: str = ""
+    publishers: list[str] = Field(default_factory=list)
+    licenses: list[str] = Field(default_factory=list)
+    access_urls: list[str] = Field(default_factory=list)
+    schema_org: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    parsed_at: datetime
+
+    class Settings:
+        name = "parsed_linked_info"
+        indexes = ["list_id", "source_catalog_id"]
+
+
+class ParsedSTDMember(Document):
+    """One provider-specific member of a standard dataset."""
+
+    id: str = Field(alias="_id")
+    source_catalog_id: str
+    list_id: int
+    public_data_detail_pk: str
+    title: str = ""
+    provider: str | None = None
+    registered_at: str | None = None
+    source_record: dict[str, Any] = Field(default_factory=dict)
+    detail_status: Literal["completed", "missing"] = "missing"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    distributions: list[dict[str, Any]] = Field(default_factory=list)
+    source_fingerprint: str
+    parser_version: str
+    parsed_at: datetime
+    is_active: bool = True
+    removed_at: datetime | None = None
+
+    class Settings:
+        name = "parsed_std_members"
+        indexes = ["source_catalog_id", "list_id"]
 
 
 class APIStdDocument(Document):

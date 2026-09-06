@@ -17,6 +17,11 @@ from models import (  # noqa: E402
     GeneratedFileDocs,
     OpenAPIInfo,
     OpenFileInfo,
+    ParsedAPIInfo,
+    ParsedFileInfo,
+    ParsedLinkedInfo,
+    ParsedSTDInfo,
+    ParsedSTDMember,
     PortalCatalog,
 )
 
@@ -44,6 +49,11 @@ async def database():
                 OpenAPIInfo,
                 OpenFileInfo,
                 PortalCatalog,
+                ParsedAPIInfo,
+                ParsedFileInfo,
+                ParsedSTDInfo,
+                ParsedLinkedInfo,
+                ParsedSTDMember,
                 GeneratedAPIDocs,
                 GeneratedFileDocs,
             ],

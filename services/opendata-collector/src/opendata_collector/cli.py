@@ -13,6 +13,8 @@ from pymongo.errors import PyMongoError
 
 from .details import DetailCollector
 from .http import FetchError, PortalHTTP
+from .parse_pipeline import ParsePipeline
+from .parse_store import ParseStore
 from .pipeline import Pipeline
 from .sources import TYPES, CatalogSource
 from .store import MongoStore
@@ -50,6 +52,12 @@ def parser():
             command.add_argument(
                 "--output", default="-", help="JSONL path or - for stdout; no DB writes"
             )
+    parse_command = commands.add_parser(
+        "parse", help="Normalize collected metadata without AI or network requests"
+    )
+    parse_command.add_argument("--types", choices=TYPES, nargs="+", default=list(TYPES))
+    parse_command.add_argument("--limit", type=positive)
+    parse_command.add_argument("--force", action="store_true")
     status = commands.add_parser("status")
     status.add_argument("run_id")
     return root
@@ -124,6 +132,16 @@ def main(argv=None):
                 report["status"] = store.get_run(args.run_id)["status"]
             print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
             return 0
+        if args.command == "parse":
+            client, mongo_store = _mongo()
+            with client:
+                report = ParsePipeline(ParseStore(mongo_store.db)).run(
+                    types=args.types,
+                    limit=args.limit,
+                    force=args.force,
+                )
+            print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
+            return 0 if report["status"] == "completed" else 2
         with PortalHTTP(
             service_key=os.environ.get("ODP_SERVICE_KEY"),
             interval=args.interval,
@@ -146,7 +164,8 @@ def main(argv=None):
             print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
             return 0 if report["status"] == "completed" else 2
     except (ValueError, FetchError, RuntimeError) as error:
-        print(f"Collection failed: {error}", file=sys.stderr)
+        operation = "Parsing" if args.command == "parse" else "Collection"
+        print(f"{operation} failed: {error}", file=sys.stderr)
         return 1
     except PyMongoError:
         print(
