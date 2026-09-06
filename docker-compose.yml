@@ -44,6 +44,7 @@ services:
       dockerfile: Dockerfile
     container_name: opendata-es
     restart: unless-stopped
+    user: "1000:0"
     cpus: 1.0
     mem_limit: "8g"
     mem_reservation: "1g"
@@ -51,6 +52,11 @@ services:
       - 9200
     volumes:
       - es-data:/usr/share/elasticsearch/data
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - path.data=/usr/share/elasticsearch/data
+      - path.logs=/usr/share/elasticsearch/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9200"]
       interval: 30s

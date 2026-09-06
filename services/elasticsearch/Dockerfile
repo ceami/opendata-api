@@ -15,6 +15,12 @@ FROM docker.elastic.co/elasticsearch/elasticsearch:8.6.2
 
 RUN elasticsearch-plugin install --batch analysis-nori
 
+# Ensure the volume mount has the right ownership so ES node lock can be obtained
+USER root
+RUN mkdir -p /usr/share/elasticsearch/data /usr/share/elasticsearch/logs \
+    && chown -R 1000:0 /usr/share/elasticsearch/data /usr/share/elasticsearch/logs
+USER 1000
+
 ENV discovery.type=single-node
 ENV xpack.security.enabled=false
 ENV ES_JAVA_OPTS="-Xms512m -Xmx512m"
