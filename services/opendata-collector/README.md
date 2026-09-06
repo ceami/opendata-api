@@ -82,6 +82,41 @@ uv run opendata-collect status RUN_ID
 
 공식 API는 동일 목록키에 여러 오퍼레이션이나 파일 레코드를 반환할 수 있으므로 `id`와 `operation_seq`를 함께 사용해 원천 레코드를 구분합니다. 목록 ID만으로 덮어쓰지 않습니다. 공식 API 전체 조회와 공개 포털은 공개 시점/대상이 다를 수 있으므로 같은 전체 건수라고 가정하지 않습니다.
 
+## 실행 순서와 월간 스냅샷·참고문서 보강
+
+운영 순서는 `collect` → `snapshot` → `references` → `parse` → AI 처리다. `collect`가 포털의 현재 목록과 상세를 기준으로 `portal_catalog`·`portal_source_records`·`portal_resources`·`portal_raw`에 적재하는 권위 있는 단계다. 이후 단계는 현재 카탈로그를 대체하지 않는다.
+
+`snapshot`은 공공데이터포털의 목록개방현황 월간 CSV를 **명시적으로** 가져와 검증·대조하는 명령이다. `collect`가 자동으로 실행하거나 월간 CSV를 자동으로 내려받지 않는다. 기본 실행은 공개 데이터셋 `15062804`의 읽기 전용 다운로드 정보를 확인한 뒤 CSV를 받고, 재현·복구에는 이미 확보해 검증할 CSV를 `--file`로 지정한다.
+
+```bash
+# 1. 현재 공개 카탈로그와 상세를 수집한다.
+uv run --env-file ../../.env.dev opendata-collect collect
+
+# 2. 공식 월간 CSV를 별도 generation으로 검증·적재한다.
+uv run --env-file ../../.env.dev opendata-collect snapshot
+
+# 네트워크 없이 같은 CSV generation을 다시 적재할 때만 사용한다.
+uv run --env-file ../../.env.dev opendata-collect snapshot --file /safe/path/monthly.csv
+
+# 3. 수집된 상세의 공식 참고 첨부문서를 보강한다. 기본 대상은 API다.
+uv run --env-file ../../.env.dev opendata-collect references --types API --limit 100
+
+# 4. 네트워크 없이 수집·스냅샷·참고문서 원천을 합쳐 파싱한다.
+uv run --env-file ../../.env.dev opendata-collect parse
+
+# 5. 이 결과를 입력으로 하는 AI 단계는 수집기 밖에서 별도로 실행한다.
+```
+
+월간 CSV는 전체 바이트·인코딩·필수 헤더·유형·목록 ID·상세 URL을 먼저 검증한 뒤에만 공개한다. 원본 CSV는 SHA-256 주소의 gzip GridFS blob으로 `portal_raw.files/chunks`에 저장하고, provenance(`source`, `raw_id`, `raw_sha256`, record hash, 원본 행)는 `portal_snapshot_runs`와 `portal_snapshot_records`에 남긴다. 완료 generation만 현재 generation으로 읽히며, 보고서에는 현재 live `portal_catalog`과의 `matched`·`snapshot_only`·`current_only` 대조 건수가 포함된다. 실패하거나 지나치게 작은 CSV는 이전 완료 generation을 바꾸지 않는다. 기본 CSV/로컬 replay 한도는 **256 MiB**이고 `--max-bytes`로 더 낮출 수 있다. 이 명령은 `portal_catalog`, 기존 projection, AI 문서를 쓰지 않는다.
+
+`parse`는 최신 완료 `portal_snapshot_runs`의 같은 카탈로그 행을 live 원천 뒤에 추가한다. 따라서 live 목록·상세의 값이 우선하고 빈 값만 월간 행으로 보완된다. parsed 문서에는 원본 월간 열(`monthly_snapshot`)과 `snapshot_run_id`, `snapshot_source`, `snapshot_raw_sha256`가 함께 남는다.
+
+`references`는 이미 수집된 활성 카탈로그의 data.go.kr 등록 첨부 중 PDF, DOCX, HWP, HWPX만 고른다. 등록 첨부 식별자와 다운로드 URL, 문서 원본/텍스트 SHA-256 GridFS 참조, 추출 상태·오류·문자 수는 `portal_reference_runs`, `portal_reference_run_items`, 그리고 `kind="reference_document"`인 `portal_resources`에 저장된다. `parse`는 이 metadata를 해당 `detail.attachments[].reference_document`에 다시 연결한다. 일반 상세·DCAT·OpenAPI resource는 reference refresh에서 retire하지 않는다.
+
+참고문서의 기본 다운로드 한도는 파일당 **32 MiB**, 텍스트 한도는 **1,000,000자**다. 추출기는 PDF 페이지·스트림, 압축 archive, HWP stream도 별도 제한으로 검사한다. `--max-bytes`와 `--max-chars`로 더 엄격하게 제한할 수 있다. `--force`는 이미 성공한 같은 첨부도 다시 처리하고, `--resume RUN_ID`는 실패·보류 checkpoint를 다시 시도하며 최초 run에 저장한 대상·한도를 그대로 사용한다. 완료 run은 재개할 수 없다.
+
+포털의 일시 오류, 다운로드 초과, 손상 파일, 사라진 첨부, 수집 상세 원문 누락은 문서별 오류 또는 `stale` 상태로 기록된다. 이런 provider-side 부분 실패가 남으면 reference run은 `incomplete`, 종료코드 2가 되며 이전 정상 reference resource는 유지된다. 재개 후 실패가 해소되면 완료될 수 있다. 이 단계는 공개 메타데이터의 허용된 data.go.kr 다운로드 경로만 요청하며, `ODP_SERVICE_KEY`가 필요 없고 개별 업무 API를 호출하지 않는다.
+
 ## AI 처리 전 파싱
 
 수집이 끝난 뒤 별도 `parse` 명령으로 저장된 원천을 정규화합니다. 이 단계는 네트워크나 AI 서비스를 호출하지 않고 `portal_catalog`, `portal_source_records`, GridFS 상세 JSON 및 현재 리소스만 읽습니다.
@@ -140,6 +175,8 @@ uv run --env-file ../../.env.dev opendata-collect parse --force
 | `portal_resources` | 메타데이터 URL·종류·조회시각·원본 SHA256 |
 | `portal_raw.files/chunks` | gzip 압축한 원본 및 전체 파싱 JSON. 큰 명세의 MongoDB 16MB 문서 제한 회피 |
 | `portal_locks` | 동시 실행 제어 |
+| `portal_snapshot_runs`, `portal_snapshot_records`, `portal_snapshot_locks` | 검증된 월간 CSV generation, 원본 행 provenance, generation 공개 lease; live 카탈로그와 분리 |
+| `portal_reference_runs`, `portal_reference_run_items` | 공식 참고문서 선택·다운로드·추출의 run 설정과 문서별 resume checkpoint |
 | `open_data_info`, `open_file_info` | 기존 API와 연결되는 요약 projection 및 파싱 상태 |
 | `parsed_api_info`, `parsed_file_info` | AI 이전 API/FILE 정규화 결과 |
 | `parsed_std_info`, `parsed_linked_info` | AI 이전 STD/LINKED 정규화 결과 |
@@ -179,4 +216,4 @@ MONGO_TEST_URL=mongodb://127.0.0.1:27017 uv run pytest tests/test_mongo_integrat
 
 단위 테스트는 HTTP 경계의 응답만 대체하고 실제 페이지 파서·페이지 검증·수집 상태 전이·DB 적재 로직을 실행합니다. 기본 실행에서는 실제 Mongo 통합 테스트를 건너뜁니다. `MONGO_TEST_URL`을 지정하면 UUID로 생성한 검증 DB에서 테스트하고 해당 DB만 삭제합니다. Mongo 동작은 mongomock/GridFS와 실제 MongoDB에서 검증하며 결과는 [VALIDATION.md](VALIDATION.md)에 기록합니다. 공개 HTML fixture는 원본 페이지의 필요한 부분을 발췌했고 출처는 `tests/fixtures/README.md`에 기록합니다.
 
-공식 제공 근거: [목록 조회 API 명세](https://infuser.odcloud.kr/oas/15077093), [공공데이터포털 목록](https://www.data.go.kr/tcs/dss/selectDataSetList.do), [목록개방현황](https://www.data.go.kr/data/15062804/fileData.do). 목록개방현황 CSV는 시점 스냅샷이고 다운로드 경로에 동적 처리도 있어 현재 수집기의 자동 원천으로 사용하지 않습니다.
+공식 제공 근거: [목록 조회 API 명세](https://infuser.odcloud.kr/oas/15077093), [공공데이터포털 목록](https://www.data.go.kr/tcs/dss/selectDataSetList.do), [목록개방현황](https://www.data.go.kr/data/15062804/fileData.do). 목록개방현황 CSV는 시점 스냅샷이므로 live `collect`의 자동 원천은 아니다. 대신 `snapshot`의 명시적 명령으로 전체 검증·대조 후 parsed 데이터의 최하위 우선순위 fallback으로 사용한다.

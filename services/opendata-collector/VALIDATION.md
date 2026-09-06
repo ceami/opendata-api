@@ -140,3 +140,73 @@ MONGO_TEST_URL=mongodb://127.0.0.1:27017 \
 ```
 
 이 검증은 기존 운영 `open_data` 문서를 일괄 변환하지 않았다. 실제 운영 파싱은 위 `parse` 명령을 별도로 실행하며 `--limit`으로 먼저 범위를 제한할 수 있다.
+
+## 월간 스냅샷·참고문서 보강 검증
+
+검증일: 2026-09-06 UTC. 이 단계는 collector의 live 카탈로그 권위, 월간 CSV generation, 참고문서 보강, API Pydantic 호환성을 분리해 확인했다. 기본 검증은 외부 포털이나 MongoDB에 쓰지 않았고, 실제 MongoDB 및 공개 포털 확인은 아래의 격리 DB 절차로만 선택적으로 실행한다.
+
+### 고정 환경의 전체 단위·기능 검증
+
+`services/opendata-collector`에서 다음을 실행했다.
+
+```bash
+uv lock --check
+uv run --frozen ruff check .
+uv run --frozen ruff format --check .
+uv run --frozen pytest -q
+```
+
+결과: lock 확인, Ruff lint/format 모두 통과했고 **228 passed, 7 skipped**였다. `MONGO_TEST_URL` 없이 실행했으므로 실제 MongoDB가 필요한 7개 통합 테스트만 건너뛰었다.
+
+월간 CSV 테스트는 UTF-8 BOM/CP949, 필수 헤더·유형·ID·URL 검증, 중복 행 거부, raw CSV content-addressed 저장, immutable completed generation, 불완전 generation 거부, local replay, 기존 live 카탈로그와의 reconciliation을 다룬다. 파싱 테스트는 최신 완료 snapshot의 행만 낮은 우선순위 원천으로 넣고 live 상세를 보존하며 `monthly_snapshot`과 run/raw provenance가 Pydantic 직렬화까지 남는지 확인한다.
+
+참고문서 테스트는 등록된 data.go.kr PDF/DOCX/HWP/HWPX만 선택하는지, per-file byte/텍스트 character limit, 압축·PDF·HWP parser 제한, raw/text hash metadata, `--force`, 실패 후 `--resume`, stale descriptor, partial failure에서 기존 active resource 보존을 확인한다. API 테스트는 각 API/FILE/STD/LINKED parser output을 해당 Pydantic model로 검증하고 월간 provenance 직렬화를 확인한다.
+
+### API 테스트 환경과 Pydantic 검증
+
+`services/opendata-api`의 `uv.lock` 확인은 통과했지만, 기본 locked runtime에는 pytest가 들어 있지 않아 `uv run --frozen pytest -q`는 `Failed to spawn: pytest`로 종료했다. 의존성 manifest를 변경하지 않고 저장소의 `tests/requirements.txt`로 별도 임시 환경을 만들었다.
+
+```bash
+cd services/opendata-api
+uv lock --check
+uv venv /tmp/opendata-api-task6-venv
+uv pip install --python /tmp/opendata-api-task6-venv/bin/python -r tests/requirements.txt
+/tmp/opendata-api-task6-venv/bin/python -m pytest -q
+```
+
+결과: **35 passed**. 여기에는 `test_parser_outputs_validate_against_api_models`의 API, FILE, STD, LINKED representative parser document `model_validate`와 월간 snapshot provenance serialization 검증이 포함된다.
+
+같은 임시 환경에서 API Ruff도 확인했다.
+
+```bash
+/tmp/opendata-api-task6-venv/bin/python -m ruff check .
+/tmp/opendata-api-task6-venv/bin/python -m ruff format --check .
+```
+
+결과: 현재 API 전체에는 **143개 Ruff lint 위반(50 files)**이 있고, format check는 `src/recommend_system/milvus_init.py`와 `tests/test_schema_compat.py` 두 파일을 재포맷 대상으로 표시했다. 이 문서 작업과 무관한 기존 상태이므로 수정하지 않았다.
+
+### 선택: 격리 MongoDB 및 공개 메타데이터 확인
+
+실제 MongoDB는 운영 DB와 다른 빈 DB URI/이름에서만 사용한다. `MONGO_TEST_URL` 통합 테스트는 UUID 테스트 DB만 만들고 종료 시 그 DB만 삭제한다.
+
+```bash
+cd services/opendata-collector
+MONGO_TEST_URL=mongodb://127.0.0.1:27017 uv run --frozen pytest -q
+```
+
+공개 메타데이터의 작은 end-to-end 확인은 전용 DB를 명시하고 제한 옵션을 유지한다. `collect`의 의도된 제한 실행은 `paused`와 종료코드 2가 정상이다. `snapshot --file`은 미리 확보한 CSV만 재생하며, `references`는 등록 첨부의 허용된 data.go.kr 다운로드 경로만 요청하고 업무 API를 호출하지 않는다.
+
+```bash
+export MONGO_URL=mongodb://127.0.0.1:27017
+export MONGO_DB=collector_snapshot_reference_validation
+
+uv run --frozen opendata-collect collect --source portal --types API \
+  --page-size 1 --max-pages 1 --max-details 1 --timeout 15 --retries 1
+uv run --frozen opendata-collect snapshot --file /safe/path/monthly.csv \
+  --max-bytes $((256 * 1024 * 1024))
+uv run --frozen opendata-collect references --types API --limit 1 \
+  --max-bytes $((32 * 1024 * 1024)) --max-chars 1000000 --timeout 15 --retries 1
+uv run --frozen opendata-collect parse --types API --limit 1
+```
+
+검사 후에는 해당 전용 `collector_snapshot_reference_validation` DB만 제거한다. 운영 `open_data`를 대상으로 이 절차를 실행하거나, `--max-bytes` 제한을 늘리거나, 개별 업무 API를 호출하지 않는다.
