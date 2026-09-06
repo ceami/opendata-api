@@ -249,17 +249,30 @@ def test_discover_snapshot_download_rejects_mismatched_or_malformed_descriptor_f
             discover_snapshot_download(client)
 
 
-def test_snapshot_persists_one_raw_csv_for_repeated_payloads(snapshot_pipeline):
-    payload = snapshot_payload(snapshot_row(1))
+def test_snapshot_deduplicates_unchanged_raw_csv_and_replaces_latest_row_fields(snapshot_pipeline):
+    first = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1, title="Original")),
+        source={"kind": "file", "name": "monthly.csv"},
+    )
+    before = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:1"})
+    second = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1, title="Renamed")),
+        source={"kind": "file", "name": "monthly.csv"},
+    )
 
-    first = snapshot_pipeline.run(payload, source={"kind": "file", "name": "monthly.csv"})
-    second = snapshot_pipeline.run(payload, source={"kind": "file", "name": "monthly.csv"})
+    third = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1, title="Renamed")),
+        source={"kind": "file", "name": "monthly.csv"},
+    )
 
     records = list(snapshot_pipeline.store.db.portal_snapshot_records.find())
-    assert snapshot_pipeline.store.db.portal_raw.files.count_documents({}) == 1
+    current = records[0]
+    assert snapshot_pipeline.store.db.portal_raw.files.count_documents({}) == 2
     assert len(records) == 1
-    assert records[0]["last_seen_run"] == second["run_id"]
-    assert first["raw_id"] == second["raw_id"]
+    assert current["title"] == "Renamed"
+    assert current["source_hash"] != before["source_hash"]
+    assert current["last_seen_run"] == third["run_id"]
+    assert first["raw_id"] != second["raw_id"] == third["raw_id"]
 
 
 def test_snapshot_rejects_invalid_payload_before_retiring_current_rows(snapshot_pipeline):
@@ -278,7 +291,9 @@ def test_snapshot_rejects_invalid_payload_before_retiring_current_rows(snapshot_
 def test_snapshot_retires_unseen_rows_only_after_a_complete_valid_snapshot(snapshot_pipeline):
     snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
 
-    report = snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
+    report = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1), snapshot_row(3)), source={"kind": "file"}
+    )
 
     current = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:1"})
     retired = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:2"})
@@ -292,9 +307,10 @@ def test_snapshot_report_reconciles_snapshot_and_authoritative_current_records(s
     catalog = snapshot_pipeline.store.db.portal_catalog
     catalog.insert_many(
         [
-            {"_id": "API:1", "is_active": True},
-            {"_id": "STD:3", "is_active": True},
-            {"_id": "FILE:4", "is_active": False},
+            {"_id": "API:1", "data_type": "API", "is_active": True},
+            {"_id": "STD:3", "data_type": "STD", "is_active": True},
+            {"_id": "LINKED:4", "data_type": "LINKED", "is_active": True},
+            {"_id": "FILE:5", "data_type": "FILE", "is_active": False},
         ]
     )
 
@@ -307,3 +323,75 @@ def test_snapshot_report_reconciles_snapshot_and_authoritative_current_records(s
         "snapshot_only": 1,
         "current_only": 1,
     }
+
+
+def test_parse_snapshot_csv_rejects_header_only_snapshot():
+    with pytest.raises(ValueError, match="no catalog rows"):
+        parse_snapshot_csv(HEADERS.encode())
+
+
+def test_snapshot_rejects_valid_prefix_that_is_too_small_to_retire_current_rows(snapshot_pipeline):
+    snapshot_pipeline.run(
+        snapshot_payload(*(snapshot_row(number) for number in range(1, 6))), source={"kind": "file"}
+    )
+
+    with pytest.raises(ValueError, match="too incomplete"):
+        snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
+
+    active = list(snapshot_pipeline.store.db.portal_snapshot_records.find({"is_active": True}))
+    assert {record["_id"] for record in active} == {f"FILE:{number}" for number in range(1, 6)}
+
+
+def test_snapshot_store_serializes_publication_with_a_dedicated_lease(snapshot_pipeline):
+    first = snapshot_pipeline.store
+    second = store_module.SnapshotStore(first.db)
+
+    first.acquire("first")
+    try:
+        with pytest.raises(RuntimeError, match="another snapshot publisher"):
+            second.acquire("second")
+    finally:
+        first.release("first")
+
+
+def test_failed_snapshot_run_is_finalized_without_retiring_current_rows(snapshot_pipeline, monkeypatch):
+    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
+    collection = snapshot_pipeline.store.db.portal_snapshot_records
+
+    def fail_bulk_write(*_, **__):
+        raise RuntimeError("simulated bulk failure")
+
+    monkeypatch.setattr(collection, "bulk_write", fail_bulk_write)
+    with pytest.raises(RuntimeError, match="simulated bulk failure"):
+        snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(3)), source={"kind": "file"})
+
+    failed = snapshot_pipeline.store.db.portal_snapshot_runs.find_one(sort=[("started_at", -1)])
+    active = list(collection.find({"is_active": True}))
+    assert failed["status"] == "failed"
+    assert {record["_id"] for record in active} == {"FILE:1", "FILE:2"}
+
+
+def test_failed_retirement_rolls_back_rows_marked_by_the_failed_run(snapshot_pipeline, monkeypatch):
+    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
+    collection = snapshot_pipeline.store.db.portal_snapshot_records
+    original = collection.update_many
+
+    def retire_then_fail(selector, update, **kwargs):
+        if selector.get("last_seen_run", {}).get("$ne"):
+            original(selector, update, **kwargs)
+            raise RuntimeError("simulated retirement acknowledgement loss")
+        return original(selector, update, **kwargs)
+
+    monkeypatch.setattr(collection, "update_many", retire_then_fail)
+    with pytest.raises(RuntimeError, match="retirement acknowledgement loss"):
+        snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(3)), source={"kind": "file"})
+
+    active = list(collection.find({"is_active": True}))
+    assert {record["_id"] for record in active} == {"FILE:1", "FILE:2"}
+
+
+def test_completed_snapshot_records_the_completed_generation(snapshot_pipeline):
+    report = snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
+
+    state = snapshot_pipeline.store.db.portal_snapshot_state.find_one({"_id": "current"})
+    assert state["active_run_id"] == report["run_id"]

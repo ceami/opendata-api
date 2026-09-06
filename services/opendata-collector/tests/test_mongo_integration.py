@@ -15,7 +15,8 @@ from test_store_pipeline import NOW, Details, Source, item
 
 from opendata_collector.http import Resource
 from opendata_collector.pipeline import Pipeline
-from opendata_collector.store import MongoStore
+from opendata_collector.snapshot import SnapshotPipeline
+from opendata_collector.store import MongoStore, SnapshotStore
 
 
 @pytest.fixture
@@ -192,3 +193,23 @@ def test_real_mongo_collect_then_parse_all_catalog_types(real_store):
     assert real_store.db.parsed_std_info.count_documents({}) == 1
     assert real_store.db.parsed_linked_info.count_documents({}) == 1
     assert real_store.db.generated_api_docs.find_one({"_id": "sentinel"})["markdown"] == "keep"
+
+
+def test_real_mongo_snapshot_uses_bulk_current_row_upserts(real_store):
+    payload = (
+        "목록키,목록유형,목록명,목록 URL\n"
+        "1,파일,Before,https://www.data.go.kr/data/1/fileData.do\n"
+        "2,파일,Other,https://www.data.go.kr/data/2/fileData.do\n"
+    ).encode()
+    pipeline = SnapshotPipeline(SnapshotStore(real_store.db, batch_size=2))
+
+    first = pipeline.run(payload, source={"kind": "integration"})
+    second = pipeline.run(
+        payload.replace(b"Before", b"After"), source={"kind": "integration"}
+    )
+
+    row = real_store.db.portal_snapshot_records.find_one({"_id": "FILE:1"})
+    assert first["status"] == second["status"] == "completed"
+    assert row["title"] == "After"
+    assert row["last_seen_run"] == second["run_id"]
+    assert real_store.db.portal_raw.files.count_documents({}) == 2

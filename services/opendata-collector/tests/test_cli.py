@@ -224,3 +224,15 @@ def test_snapshot_defaults_to_the_official_csv_size_limit():
     from opendata_collector.cli import parser
 
     assert parser().parse_args(["snapshot"]).max_bytes == 268435456
+
+
+def test_snapshot_file_rejects_payload_larger_than_max_bytes_before_mongo(monkeypatch, tmp_path, capsys):
+    source_file = tmp_path / "too-large.csv"
+    source_file.write_bytes(b"1234")
+    monkeypatch.setattr(
+        "opendata_collector.cli._mongo",
+        lambda: (_ for _ in ()).throw(AssertionError("Mongo must not be constructed")),
+    )
+
+    assert main(["snapshot", "--file", str(source_file), "--max-bytes", "3"]) == 1
+    assert "exceeds size limit" in capsys.readouterr().err

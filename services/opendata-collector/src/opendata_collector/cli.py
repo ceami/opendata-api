@@ -155,6 +155,8 @@ def main(argv=None):
         if args.command == "snapshot":
             if args.file:
                 file_path = Path(args.file)
+                if file_path.stat().st_size > args.max_bytes:
+                    raise ValueError("Snapshot file exceeds size limit")
                 content = file_path.read_bytes()
                 source = {"kind": "file", "name": file_path.name}
             else:

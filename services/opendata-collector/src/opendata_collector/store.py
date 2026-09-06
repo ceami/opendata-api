@@ -410,12 +410,16 @@ class MongoStore:
 class SnapshotStore:
     """Persist validated monthly CSV rows without changing live catalog authority."""
 
+    SUPPORTED_TYPES = ("API", "FILE", "STD")
+    MIN_COMPLETENESS_RATIO = 0.8
+
     def __init__(self, database, *, batch_size=1000):
         if batch_size < 1:
             raise ValueError("Snapshot batch size must be positive")
         self.db = database
         self.raw = gridfs.GridFS(database, collection="portal_raw")
         self.batch_size = batch_size
+        self.owner = None
 
     def initialize(self):
         self.db.portal_snapshot_records.create_index(
@@ -424,6 +428,40 @@ class SnapshotStore:
         self.db.portal_snapshot_records.create_index([("is_active", 1), ("last_seen_run", 1)])
         self.db.portal_snapshot_runs.create_index("started_at")
         self.db.portal_snapshot_runs.create_index("raw_sha256")
+
+    def acquire(self, owner):
+        instant = now()
+        try:
+            lease = self.db.portal_snapshot_locks.find_one_and_update(
+                {
+                    "_id": "publisher",
+                    "$or": [{"expires_at": {"$lte": instant}}, {"owner": owner}],
+                },
+                {"$set": {"owner": owner, "expires_at": instant + timedelta(minutes=10)}},
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError:
+            raise RuntimeError(
+                "Snapshot publication is locked by another snapshot publisher"
+            ) from None
+        if not lease or lease["owner"] != owner:
+            raise RuntimeError("Snapshot publication is locked by another snapshot publisher")
+        self.owner = owner
+
+    def heartbeat(self):
+        if self.owner:
+            result = self.db.portal_snapshot_locks.update_one(
+                {"_id": "publisher", "owner": self.owner},
+                {"$set": {"expires_at": now() + timedelta(minutes=10)}},
+            )
+            if result.matched_count != 1:
+                raise RuntimeError("Snapshot publication lease lost")
+
+    def release(self, owner):
+        self.db.portal_snapshot_locks.delete_one({"_id": "publisher", "owner": owner})
+        if self.owner == owner:
+            self.owner = None
 
     def save_raw(self, content):
         raw_id = hashlib.sha256(content).hexdigest()
@@ -450,6 +488,17 @@ class SnapshotStore:
         for start in range(0, len(values), size):
             yield values[start : start + size]
 
+    def _assert_complete_enough(self, rows):
+        previous_count = self.db.portal_snapshot_records.count_documents(
+            {"is_active": {"$ne": False}}
+        )
+        minimum = (previous_count * 4 + 4) // 5
+        if previous_count and len(rows) < minimum:
+            raise ValueError(
+                "Snapshot is too incomplete to retire current rows "
+                f"({len(rows)} of {previous_count})"
+            )
+
     def start_run(self, *, source, raw_id, raw_sha256, record_count):
         run = {
             "_id": str(uuid.uuid4()),
@@ -465,19 +514,22 @@ class SnapshotStore:
         self.db.portal_snapshot_runs.insert_one(run)
         return run
 
-    def persist(self, rows, *, source, raw_content):
-        """Publish validated rows in batches, then retire rows absent from this snapshot."""
-        self.initialize()
-        raw_sha256 = hashlib.sha256(raw_content).hexdigest()
-        raw_id = self.save_raw(raw_content)
-        run = self.start_run(
-            source=source,
-            raw_id=raw_id,
-            raw_sha256=raw_sha256,
-            record_count=len(rows),
-        )
+    def _write_batch(self, operations, updates):
+        try:
+            self.db.portal_snapshot_records.bulk_write(operations, ordered=False)
+        except TypeError as error:
+            # mongomock 4.3 cannot accept PyMongo's current UpdateOne(sort=...) API.
+            if not type(self.db).__module__.startswith("mongomock.") or (
+                "unexpected keyword argument 'sort'" not in str(error)
+            ):
+                raise
+            for selector, update in updates:
+                self.db.portal_snapshot_records.update_one(selector, update, upsert=True)
+
+    def _save_rows(self, rows, run_id, raw_id, raw_sha256):
         seen_at = now()
         for batch in self._batches(rows, self.batch_size):
+            self.heartbeat()
             operations, updates = [], []
             for row in batch:
                 fields = {
@@ -492,56 +544,112 @@ class SnapshotStore:
                     "detail_hash": hashlib.sha256(row["detail_url"].encode()).hexdigest(),
                     "raw_id": raw_id,
                     "raw_sha256": raw_sha256,
-                    "last_seen_run": run["_id"],
+                    "last_seen_run": run_id,
                     "last_seen_at": seen_at,
-                    "is_active": True,
                 }
                 selector = {"_id": row["catalog_id"]}
                 update = {
                     "$set": fields,
-                    "$unset": {"removed_at": ""},
-                    "$setOnInsert": {"first_seen_at": seen_at},
+                    "$setOnInsert": {"first_seen_at": seen_at, "is_active": False},
                 }
                 updates.append((selector, update))
                 operations.append(UpdateOne(selector, update, upsert=True))
             if operations:
-                try:
-                    self.db.portal_snapshot_records.bulk_write(operations, ordered=False)
-                except TypeError as error:
-                    # mongomock 4.3 is incompatible with PyMongo's current UpdateOne API.
-                    if "unexpected keyword argument 'sort'" not in str(error):
-                        raise
-                    for selector, update in updates:
-                        self.db.portal_snapshot_records.update_one(selector, update, upsert=True)
+                self._write_batch(operations, updates)
 
-        # A write failure above leaves this run incomplete and cannot retire previous rows.
-        retired = self.db.portal_snapshot_records.update_many(
-            {
-                "last_seen_run": {"$ne": run["_id"]},
-                "is_active": {"$ne": False},
-            },
-            {"$set": {"is_active": False, "removed_at": now()}},
-        ).modified_count
-        reconciliation = self.reconciliation()
-        report = {
-            "run_id": run["_id"],
-            "status": "completed",
-            "source": source,
-            "raw_id": raw_id,
-            "raw_sha256": raw_sha256,
-            "record_count": len(rows),
-            "retired_count": retired,
-            "reconciliation": reconciliation,
-        }
-        self.db.portal_snapshot_runs.update_one(
-            {"_id": run["_id"]},
-            {"$set": {"status": "completed", "summary": report, "updated_at": now()}},
-        )
-        return report
+    def _fail_run(self, run, error):
+        if run is not None:
+            # Roll back a retirement that reached Mongo before its acknowledgement was lost.
+            try:
+                self.db.portal_snapshot_records.update_many(
+                    {"removed_by_run": run["_id"]},
+                    {
+                        "$set": {"is_active": True},
+                        "$unset": {"removed_at": "", "removed_by_run": ""},
+                    },
+                )
+            except Exception:
+                pass
+            self.db.portal_snapshot_runs.update_one(
+                {"_id": run["_id"], "status": {"$ne": "completed"}},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": str(error),
+                        "failed_at": now(),
+                        "updated_at": now(),
+                    }
+                },
+            )
+
+    def persist(self, rows, *, source, raw_content):
+        """Publish validated rows in batches, then retire rows absent from this snapshot."""
+        self.initialize()
+        owner = str(uuid.uuid4())
+        self.acquire(owner)
+        run = None
+        try:
+            self._assert_complete_enough(rows)
+            raw_sha256 = hashlib.sha256(raw_content).hexdigest()
+            raw_id = self.save_raw(raw_content)
+            run = self.start_run(
+                source=source,
+                raw_id=raw_id,
+                raw_sha256=raw_sha256,
+                record_count=len(rows),
+            )
+            self._save_rows(rows, run["_id"], raw_id, raw_sha256)
+            # Newly inserted rows remain inactive until every batch has been persisted.
+            retired = self.db.portal_snapshot_records.update_many(
+                {"last_seen_run": {"$ne": run["_id"]}, "is_active": {"$ne": False}},
+                {
+                    "$set": {
+                        "is_active": False,
+                        "removed_at": now(),
+                        "removed_by_run": run["_id"],
+                    }
+                },
+            ).modified_count
+            self.db.portal_snapshot_records.update_many(
+                {"last_seen_run": run["_id"]},
+                {
+                    "$set": {"is_active": True, "published_run": run["_id"]},
+                    "$unset": {"removed_at": "", "removed_by_run": ""},
+                },
+            )
+            reconciliation = self.reconciliation()
+            report = {
+                "run_id": run["_id"],
+                "status": "completed",
+                "source": source,
+                "raw_id": raw_id,
+                "raw_sha256": raw_sha256,
+                "record_count": len(rows),
+                "retired_count": retired,
+                "reconciliation": reconciliation,
+            }
+            self.db.portal_snapshot_runs.update_one(
+                {"_id": run["_id"]},
+                {"$set": {"status": "completed", "summary": report, "updated_at": now()}},
+            )
+            self.db.portal_snapshot_state.update_one(
+                {"_id": "current"},
+                {"$set": {"active_run_id": run["_id"], "updated_at": now()}},
+                upsert=True,
+            )
+            return report
+        except Exception as error:
+            self._fail_run(run, error)
+            raise
+        finally:
+            self.release(owner)
 
     def reconciliation(self):
         active_snapshot = {"is_active": {"$ne": False}}
-        active_current = {"is_active": {"$ne": False}}
+        active_current = {
+            "is_active": {"$ne": False},
+            "data_type": {"$in": self.SUPPORTED_TYPES},
+        }
         snapshot_count = self.db.portal_snapshot_records.count_documents(active_snapshot)
         current_count = self.db.portal_catalog.count_documents(active_current)
         matched = 0

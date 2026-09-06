@@ -114,6 +114,8 @@ def parse_snapshot_csv(payload):
                 "source_record": dict(row),
             }
         )
+    if not items:
+        raise ValueError("Snapshot CSV has no catalog rows")
     return items
 
 
