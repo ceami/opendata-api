@@ -719,6 +719,7 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         monthly.get("dept_nm"),
         organization,
     )
+    schema_format = _first(*_strings(schema.get("encodingFormat")), default="")
     category = _first(
         source.get("category_nm"),
         source.get("new_category_nm"),
@@ -730,6 +731,7 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         source.get("ext"),
         _metadata_value(metadata, "확장자", "데이터포맷", "포맷"),
         detail.get("detail_format"),
+        schema_format,
         monthly.get("data_format"),
         monthly.get("ext"),
     )

@@ -337,7 +337,9 @@ def test_parsed_api_document_construct_serializes_monthly_snapshot_fields():
     # this concrete parser document so its Pydantic serialization can be asserted here.
     document = ParsedAPIInfo.model_construct(**output.document).model_dump(mode="json")
 
-    assert document["monthly_snapshot"] == {"목록명": "monthly", "조회수": "9", "제공유형": "FILE"}
+    assert document["monthly_snapshot"] == output.document["monthly_snapshot"]
+    assert document["monthly_snapshot"]["관리부서 전화번호"] == "02-1111-2222"
+    assert document["monthly_snapshot"]["심의 여부"] == "Y"
     assert document["snapshot_run_id"] == "snapshot-run"
     assert document["snapshot_source"] == {"name": "monthly.csv"}
     assert document["snapshot_raw_sha256"] == "snapshot-hash"

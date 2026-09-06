@@ -78,3 +78,25 @@ All checks passed!
 ```
 
 The API schema compatibility test now uses `ParsedAPIInfo.model_construct(**output.document).model_dump(mode="json")` to assert concrete parsed document fields without initialized Beanie collections. A direct command using the API virtual environment plus collector dependencies passed for contact, API type, confirmation, traffic, and review fields. API pytest remains unavailable because `services/opendata-api/.venv` does not include `pytest`; this is unchanged from the original report.
+
+## Second review-fix addendum
+
+- `data_format` now uses the first normalized schema.org `encodingFormat` value (scalar or list) after live/detail metadata and before snapshot fields. The precedence regression removes metadata/detail-format values, supplies `encodingFormat="Schema format"`, and verifies that it wins over a monthly `확장자="CSV"`.
+- The API schema test now compares `document["monthly_snapshot"]` with the parser's complete raw row and checks preserved contact/review columns. It no longer compares the ten-column raw snapshot with a truncated three-column dictionary.
+
+Validation after this addendum:
+
+```text
+cd services/opendata-collector
+uv run pytest tests/test_parse_pipeline.py tests/test_parse_normalizers.py -q
+42 passed in 0.19s
+
+uv run ruff check src/opendata_collector/parse_store.py src/opendata_collector/parse_normalizers.py tests/test_parse_pipeline.py tests/test_parse_normalizers.py
+All checks passed!
+
+cd services/opendata-api
+../opendata-collector/.venv/bin/ruff check --select E,F,I --ignore E501 src/models/open_data.py tests/test_schema_compat.py
+All checks passed!
+```
+
+API pytest remains unavailable because its virtual environment has no `pytest`. The exact former truncated-row assertion was reproduced as an `AssertionError` using the direct `ParsedAPIInfo.model_construct(...).model_dump(mode="json")` path; the updated full-row assertion then passed through the same direct execution path.

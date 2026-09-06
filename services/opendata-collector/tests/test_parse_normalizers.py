@@ -1130,7 +1130,6 @@ def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance(
         "metadata": {
             "공간범위": ["detail spatial"],
             "분류체계": ["Detail category"],
-            "확장자": ["JSON"],
             "등록일": ["2024-01-02"],
             "수정일": ["2024-02-03"],
         },
@@ -1141,13 +1140,14 @@ def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance(
                 "creator": {"name": "Schema organization"},
                 "dateCreated": "2024-01-01",
                 "dateModified": "2024-02-01",
+                "encodingFormat": "Schema format",
                 "temporalCoverage": "detail temporal",
             }
         ],
         "api_specs": [],
         "attachments": [],
         "tables": [],
-        "detail_format": "TABLE",
+        "detail_format": "",
     }
     monthly_row = {
         "목록키": "7",
@@ -1189,7 +1189,7 @@ def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance(
     assert output.document["organization"] == "Schema organization"
     assert output.document["department"] == "Monthly department"
     assert output.document["category"] == "Detail category"
-    assert output.document["data_format"] == "JSON"
+    assert output.document["data_format"] == "Schema format"
     assert output.document["created_at"] == datetime(2024, 1, 1, tzinfo=timezone.utc)
     assert output.document["update_at"] == datetime(2024, 2, 1, tzinfo=timezone.utc)
     assert output.document["license"] == "Monthly license"
