@@ -167,21 +167,23 @@ def main(argv=None):
             return 0 if report["status"] == "completed" else 2
         if args.command == "references":
             client, mongo_store = _mongo()
+            reference_store = ReferenceStore(mongo_store.db)
+            saved = reference_store.get_run(args.resume) if args.resume else None
             with (
                 client,
                 PortalHTTP(
                     interval=args.interval,
                     retries=args.retries,
                     timeout=args.timeout,
-                    max_bytes=args.max_bytes,
+                    max_bytes=saved["max_bytes"] if saved else args.max_bytes,
                 ) as http,
             ):
-                report = ReferencePipeline(ReferenceStore(mongo_store.db), http).run(
-                    types=args.types,
-                    limit=args.limit,
-                    max_bytes=args.max_bytes,
-                    max_chars=args.max_chars,
-                    force=args.force,
+                report = ReferencePipeline(reference_store, http).run(
+                    types=None if saved else args.types,
+                    limit=None if saved else args.limit,
+                    max_bytes=None if saved else args.max_bytes,
+                    max_chars=None if saved else args.max_chars,
+                    force=None if saved else args.force,
                     resume=args.resume,
                 )
             print(json.dumps(report, ensure_ascii=False, default=str, indent=2))

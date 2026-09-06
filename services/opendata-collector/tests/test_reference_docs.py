@@ -170,9 +170,7 @@ def test_successful_reference_refresh_retires_only_its_previous_attachment_resou
     ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=32, force=True)
 
     resources = list(
-        store.db.portal_resources.find(
-            {"catalog_id": "API:15129394", "kind": "reference_document"}
-        )
+        store.db.portal_resources.find({"catalog_id": "API:15129394", "kind": "reference_document"})
     )
     assert len(resources) == 2
     assert len([value for value in resources if value["is_active"]]) == 1
@@ -647,3 +645,107 @@ def test_pdf_policy_is_active_during_reader_construction_and_content_resolution(
         for _, values in observations
     )
     assert {name: getattr(filters, name) for name in reference_docs.PDF_FILTER_LIMITS} == original
+
+
+def test_reference_resume_uses_persisted_limits_and_retries_malformed_content(monkeypatch):
+    store = reference_store_with_catalogs(file=False)
+    http = ReferenceHTTP(b"long document")
+    monkeypatch.setattr(
+        reference_docs,
+        "extract_reference_text",
+        lambda payload, name, *, max_chars: {
+            "status": "MALFORMED",
+            "text": "",
+            "char_count": 0,
+            "error": "Malformed DOCX archive",
+        },
+    )
+    first = ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=2)
+    assert first["status"] == "incomplete"
+    resource = store.db.portal_resources.find_one({"kind": "reference_document"})
+    assert resource["is_active"] is False
+    assert store.db.portal_reference_runs.find_one({"_id": first["run_id"]})["max_chars"] == 2
+
+    observed = {}
+
+    def extracted(payload, name, *, max_chars):
+        observed["max_chars"] = max_chars
+        return {"status": "EXTRACTED", "text": "ok", "char_count": 2, "error": None}
+
+    monkeypatch.setattr(reference_docs, "extract_reference_text", extracted)
+    second = ReferencePipeline(store, http).run(resume=first["run_id"])
+    assert second["status"] == "completed"
+    assert observed["max_chars"] == 2
+
+
+def test_reference_resume_marks_removed_descriptor_stale_without_publishing(monkeypatch):
+    store = reference_store_with_catalogs(file=False)
+    http = ReferenceHTTP()
+    http.fail.add(
+        "https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=FILE_000000000001&fileDetailSn=2&dataNm=API+guide.docx"
+    )
+    first = ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=10)
+    catalog = store.db.portal_catalog.find_one({"_id": "API:15129394"})
+    MongoStore(store.db).save_raw(json.dumps({"attachments": []}).encode())
+    store.db.portal_catalog.update_one(
+        {"_id": catalog["_id"]},
+        {
+            "$set": {
+                "parsed_detail_ref": MongoStore(store.db).save_raw(
+                    json.dumps({"attachments": []}).encode()
+                )
+            }
+        },
+    )
+    http.fail.clear()
+    resumed = ReferencePipeline(store, http).run(resume=first["run_id"])
+    assert resumed["status"] == "completed"
+    assert resumed["stale"] == 1
+    assert (
+        store.db.portal_resources.count_documents({"kind": "reference_document", "is_active": True})
+        == 0
+    )
+
+
+def test_selection_load_failures_checkpoint_and_resume_before_document_processing(monkeypatch):
+    store = reference_store_with_catalogs(file=False)
+    store.db.portal_catalog.insert_one(
+        {
+            "_id": "API:2",
+            "data_type": "API",
+            "list_id": 2,
+            "is_active": True,
+            "detail_status": "completed",
+            "parsed_detail_ref": "missing",
+        }
+    )
+    http = ReferenceHTTP()
+    monkeypatch.setattr(
+        reference_docs,
+        "extract_reference_text",
+        lambda *_args, **_kwargs: {
+            "status": "EXTRACTED",
+            "text": "ok",
+            "char_count": 2,
+            "error": None,
+        },
+    )
+    first = ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=10)
+    assert first["status"] == "incomplete"
+    assert first["selection_complete"] is False
+    assert first["failed"] == 1
+    assert http.calls == []
+    store.db.portal_catalog.update_one(
+        {"_id": "API:2"},
+        {
+            "$set": {
+                "parsed_detail_ref": MongoStore(store.db).save_raw(
+                    json.dumps({"attachments": []}).encode()
+                )
+            }
+        },
+    )
+    resumed = ReferencePipeline(store, http).run(resume=first["run_id"])
+    assert resumed["status"] == "completed"
+    assert resumed["selection_complete"] is True
+    assert resumed["completed"] == 1

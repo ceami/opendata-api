@@ -206,27 +206,22 @@ class ParseStore:
         if not isinstance(attachments, list):
             return
         item = {**catalog, "catalog_id": catalog["_id"]}
-        descriptors = select_reference_attachments(item, detail)
-        descriptor_by_fields = {
-            (descriptor["name"], descriptor["file_id"], descriptor["file_detail_sn"]): descriptor
-            for descriptor in descriptors
-        }
         resources = {
             value.get("attachment_id"): value
             for value in stored_resources
             if value.get("kind") == "reference_document" and value.get("is_active") is not False
         }
+        hidden = detail.get("hidden_fields")
         for attachment in attachments:
             if not isinstance(attachment, dict):
                 continue
-            name = attachment.get("name")
-            key = (
-                name.strip() if isinstance(name, str) else name,
-                attachment.get("file_id"),
-                attachment.get("file_detail_sn"),
+            # Use the collection selector for this attachment’s canonical identity.
+            descriptors = select_reference_attachments(
+                item, {"hidden_fields": hidden, "attachments": [attachment]}
             )
-            descriptor = descriptor_by_fields.get(key)
-            resource = resources.get(descriptor["attachment_id"]) if descriptor else None
+            if not descriptors:
+                continue
+            resource = resources.get(descriptors[0]["attachment_id"])
             if resource is None:
                 continue
             attachment["reference_document"] = {

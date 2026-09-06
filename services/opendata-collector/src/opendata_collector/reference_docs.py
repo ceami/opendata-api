@@ -16,6 +16,8 @@ import olefile
 from pypdf import PdfReader, filters
 from pypdf.errors import LimitReachedError
 
+from .http import FetchError
+
 BASE_URL = "https://www.data.go.kr"
 DOWNLOAD_PATH = "/cmm/cmm/fileDownload.do"
 SUPPORTED_FORMATS = {"pdf": "PDF", "docx": "DOCX", "hwp": "HWP", "hwpx": "HWPX"}
@@ -709,57 +711,83 @@ class ReferencePipeline:
     """Download and extract official registered reference attachments independently."""
 
     def __init__(self, store, http):
-        self.store = store
-        self.http = http
+        self.store, self.http = store, http
 
     def run(
-        self,
-        *,
-        types=None,
-        limit=None,
-        max_bytes=REFERENCE_MAX_BYTES,
-        max_chars=REFERENCE_MAX_CHARS,
-        force=False,
-        resume=None,
+        self, *, types=None, limit=None, max_bytes=None, max_chars=None, force=None, resume=None
     ):
-        selected_types = list(dict.fromkeys(types or ["API"]))
-        if not selected_types or any(not isinstance(kind, str) for kind in selected_types):
-            raise ValueError("Invalid reference catalog types")
-        if limit is not None and (not isinstance(limit, int) or limit < 1):
-            raise ValueError("Reference limit must be positive")
-        if not isinstance(max_bytes, int) or max_bytes < 1:
-            raise ValueError("Reference byte limit must be positive")
-        if not isinstance(max_chars, int) or max_chars < 1:
-            raise ValueError("Reference character limit must be positive")
         self.store.initialize()
         if resume:
             run = self.store.get_run(resume)
             if run.get("status") == "completed":
                 raise ValueError("Completed reference run cannot be resumed")
         else:
-            run = self.store.start_run(selected_types, max_bytes, max_chars, force)
+            selected_types = list(dict.fromkeys(types or ["API"]))
+            if not selected_types or any(not isinstance(kind, str) for kind in selected_types):
+                raise ValueError("Invalid reference catalog types")
+            max_bytes = REFERENCE_MAX_BYTES if max_bytes is None else max_bytes
+            max_chars = REFERENCE_MAX_CHARS if max_chars is None else max_chars
+            if limit is not None and (not isinstance(limit, int) or limit < 1):
+                raise ValueError("Reference limit must be positive")
+            if (
+                not isinstance(max_bytes, int)
+                or max_bytes < 1
+                or not isinstance(max_chars, int)
+                or max_chars < 1
+            ):
+                raise ValueError("Invalid reference limits")
+            run = self.store.start_run(selected_types, limit, max_bytes, max_chars, bool(force))
+        # Saved configuration is authoritative for every resume.
+        selected_types, limit, max_bytes, max_chars, force = (
+            run["types"],
+            run.get("limit"),
+            run["max_bytes"],
+            run["max_chars"],
+            run["force"],
+        )
+        if not run.get("selection_complete"):
             selected = 0
-            for catalog, detail in self.store.catalogs(selected_types):
-                item = {**catalog, "catalog_id": catalog["_id"]}
-                for descriptor in select_reference_attachments(item, detail):
+            selection_ok = True
+            try:
+                for catalog, detail, error in self.store.catalogs(selected_types):
+                    if error:
+                        self.store.catalog_error(run["_id"], catalog["_id"], error)
+                        selection_ok = False
+                        continue
+                    self.store.catalog_loaded(run["_id"], catalog["_id"])
+                    item = {**catalog, "catalog_id": catalog["_id"]}
+                    for descriptor in select_reference_attachments(item, detail):
+                        if limit is not None and selected >= limit:
+                            break
+                        self.store.add_item(run["_id"], descriptor, force=force)
+                        selected += 1
                     if limit is not None and selected >= limit:
                         break
-                    self.store.add_item(run["_id"], descriptor, force=force)
-                    selected += 1
-                if limit is not None and selected >= limit:
-                    break
-        for item in self.store.pending(run["_id"]):
-            descriptor = item["descriptor"]
-            try:
-                resource = self.http.get(descriptor["url"], kind="reference_document")
-                if len(resource.content) > max_bytes:
-                    raise ValueError("Reference download exceeds size limit")
-                extracted = extract_reference_text(
-                    resource.content, descriptor["name"], max_chars=max_chars
-                )
-                self.store.save_document(run["_id"], descriptor, resource, extracted)
-            except Exception as error:
-                self.store.fail_document(run["_id"], descriptor, error)
+            except Exception:
+                selection_ok = False
+            self.store.selection_complete(run["_id"], selection_ok)
+            run = self.store.get_run(run["_id"])
+        if run.get("selection_complete"):
+            for item in self.store.pending(run["_id"]):
+                descriptor = self.store.current_descriptor(item["descriptor"])
+                if descriptor is None:
+                    self.store.stale_document(run["_id"], item["descriptor"])
+                    continue
+                try:
+                    resource = self.http.get(descriptor["url"], kind="reference_document")
+                    if len(resource.content) > max_bytes:
+                        self.store.fail_document(
+                            run["_id"], descriptor, "Reference download exceeds size limit"
+                        )
+                        continue
+                    extracted = extract_reference_text(
+                        resource.content, descriptor["name"], max_chars=max_chars
+                    )
+                    self.store.save_document(run["_id"], descriptor, resource, extracted)
+                except FetchError as error:
+                    self.store.fail_document(run["_id"], descriptor, str(error))
+                except Exception:
+                    self.store.fail_document(run["_id"], descriptor, "Reference processing failed")
         return self.store.report(run["_id"], persist=True)
 
 

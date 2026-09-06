@@ -287,6 +287,7 @@ class MongoStore:
                 {
                     "catalog_id": item["catalog_id"],
                     "_id": {"$nin": current_resource_ids},
+                    "kind": {"$ne": "reference_document"},
                     "is_active": {"$ne": False},
                 },
                 {"$set": {"is_active": False, "removed_at": collected_at}},
@@ -732,6 +733,8 @@ class SnapshotStore:
 class ReferenceStore:
     """Persist independently refreshable official reference-document attachments."""
 
+    SUCCESS_STATUSES = {"EXTRACTED", "TRUNCATED", "UNSUPPORTED"}
+
     def __init__(self, database):
         self.db = database
         self.raw = gridfs.GridFS(database, collection="portal_raw")
@@ -761,7 +764,10 @@ class ReferenceStore:
         return raw_id
 
     def load_detail(self, detail_ref):
-        return json.loads(gzip.decompress(self.raw.get(detail_ref).read()))
+        detail = json.loads(gzip.decompress(self.raw.get(detail_ref).read()))
+        if not isinstance(detail, dict):
+            raise ValueError("Collected detail is not a JSON object")
+        return detail
 
     def catalogs(self, types):
         query = {
@@ -772,26 +778,27 @@ class ReferenceStore:
         }
         for catalog in self.db.portal_catalog.find(query).sort([("data_type", 1), ("list_id", 1)]):
             try:
-                detail = self.load_detail(catalog["parsed_detail_ref"])
+                yield catalog, self.load_detail(catalog["parsed_detail_ref"]), None
             except (
                 KeyError,
                 gridfs.errors.NoFile,
                 gzip.BadGzipFile,
                 json.JSONDecodeError,
                 OSError,
+                EOFError,
+                ValueError,
             ):
-                continue
-            if isinstance(detail, dict):
-                yield catalog, detail
+                yield catalog, None, "Cannot load collected detail payload"
 
-    def start_run(self, types, max_bytes, max_chars, force):
-        run_id = str(uuid.uuid4())
+    def start_run(self, types, limit, max_bytes, max_chars, force):
         run = {
-            "_id": run_id,
+            "_id": str(uuid.uuid4()),
             "types": list(types),
+            "limit": limit,
             "max_bytes": max_bytes,
             "max_chars": max_chars,
             "force": force,
+            "selection_complete": False,
             "started_at": now(),
             "updated_at": now(),
             "status": "running",
@@ -805,6 +812,14 @@ class ReferenceStore:
             raise ValueError("Unknown reference run ID")
         return run
 
+    def selection_complete(self, run_id, complete):
+        self.db.portal_reference_runs.update_one(
+            {"_id": run_id}, {"$set": {"selection_complete": complete, "updated_at": now()}}
+        )
+
+    def _item_id(self, run_id, attachment_id):
+        return digest(run_id + "\n" + attachment_id)
+
     def add_item(self, run_id, descriptor, *, force):
         existing = self.db.portal_resources.find_one(
             {
@@ -812,16 +827,17 @@ class ReferenceStore:
                 "kind": "reference_document",
                 "attachment_id": descriptor["attachment_id"],
                 "is_active": {"$ne": False},
+                "extraction_status": {"$in": list(self.SUCCESS_STATUSES)},
             },
             {"_id": 1},
         )
-        status = "pending" if force or existing is None else "skipped"
         item = {
-            "_id": digest(run_id + "\n" + descriptor["attachment_id"]),
+            "_id": self._item_id(run_id, descriptor["attachment_id"]),
             "run_id": run_id,
             "attachment_id": descriptor["attachment_id"],
             "descriptor": descriptor,
-            "status": status,
+            "item_type": "document",
+            "status": "pending" if force or existing is None else "skipped",
             "attempts": 0,
             "updated_at": now(),
         }
@@ -829,19 +845,83 @@ class ReferenceStore:
             {"_id": item["_id"]}, {"$setOnInsert": item}, upsert=True
         )
 
+    def catalog_error(self, run_id, catalog_id, error):
+        attachment_id = "catalog:" + catalog_id
+        self.db.portal_reference_run_items.update_one(
+            {"_id": self._item_id(run_id, attachment_id)},
+            {
+                "$set": {
+                    "run_id": run_id,
+                    "attachment_id": attachment_id,
+                    "item_type": "catalog",
+                    "catalog_id": catalog_id,
+                    "status": "failed",
+                    "errors": [{"error": error}],
+                    "updated_at": now(),
+                },
+                "$setOnInsert": {"attempts": 0},
+            },
+            upsert=True,
+        )
+
+    def catalog_loaded(self, run_id, catalog_id):
+        self.db.portal_reference_run_items.update_one(
+            {"_id": self._item_id(run_id, "catalog:" + catalog_id)},
+            {"$set": {"status": "skipped", "errors": [], "updated_at": now()}},
+        )
+
     def pending(self, run_id):
         return self.db.portal_reference_run_items.find(
-            {"run_id": run_id, "status": {"$in": ["pending", "failed"]}}
+            {"run_id": run_id, "item_type": "document", "status": {"$in": ["pending", "failed"]}}
         ).sort("attachment_id", 1)
 
+    def current_descriptor(self, descriptor):
+        catalog = self.db.portal_catalog.find_one(
+            {
+                "_id": descriptor["catalog_id"],
+                "is_active": {"$ne": False},
+                "detail_status": {"$in": ["completed", "partial"]},
+            }
+        )
+        if not catalog or not catalog.get("parsed_detail_ref"):
+            return None
+        try:
+            detail = self.load_detail(catalog["parsed_detail_ref"])
+        except (
+            KeyError,
+            gridfs.errors.NoFile,
+            gzip.BadGzipFile,
+            json.JSONDecodeError,
+            OSError,
+            EOFError,
+            ValueError,
+        ):
+            return None
+        from .reference_docs import select_reference_attachments
+
+        item = {**catalog, "catalog_id": catalog["_id"]}
+        return next(
+            (
+                value
+                for value in select_reference_attachments(item, detail)
+                if value["attachment_id"] == descriptor["attachment_id"]
+            ),
+            None,
+        )
+
+    def stale_document(self, run_id, descriptor):
+        self.db.portal_reference_run_items.update_one(
+            {"_id": self._item_id(run_id, descriptor["attachment_id"])},
+            {"$set": {"status": "stale", "errors": [], "updated_at": now()}},
+        )
+
     def save_document(self, run_id, descriptor, resource, extracted):
-        content = resource.content
-        text = extracted["text"].encode("utf-8")
-        raw_id = self.save_raw(content)
-        text_raw_id = self.save_raw(text)
+        raw_id = self.save_raw(resource.content)
+        text_raw_id = self.save_raw(extracted["text"].encode("utf-8"))
         resource_id = digest(
             "\n".join((descriptor["catalog_id"], descriptor["attachment_id"], raw_id))
         )
+        terminal = extracted["status"] in self.SUCCESS_STATUSES
         collected_at = now()
         fields = {
             "catalog_id": descriptor["catalog_id"],
@@ -864,29 +944,31 @@ class ReferenceStore:
             "char_count": extracted["char_count"],
             "last_seen_run": run_id,
             "collected_at": collected_at,
-            "is_active": True,
+            "is_active": terminal,
         }
         self.db.portal_resources.update_one(
             {"_id": resource_id}, {"$set": fields, "$unset": {"removed_at": ""}}, upsert=True
         )
-        # A reference refresh owns only this descriptor's reference-document lifecycle.
-        self.db.portal_resources.update_many(
-            {
-                "catalog_id": descriptor["catalog_id"],
-                "kind": "reference_document",
-                "attachment_id": descriptor["attachment_id"],
-                "_id": {"$ne": resource_id},
-                "is_active": {"$ne": False},
-            },
-            {"$set": {"is_active": False, "removed_at": collected_at}},
-        )
+        if terminal:
+            self.db.portal_resources.update_many(
+                {
+                    "catalog_id": descriptor["catalog_id"],
+                    "kind": "reference_document",
+                    "attachment_id": descriptor["attachment_id"],
+                    "_id": {"$ne": resource_id},
+                    "is_active": {"$ne": False},
+                },
+                {"$set": {"is_active": False, "removed_at": collected_at}},
+            )
         self.db.portal_reference_run_items.update_one(
-            {"_id": digest(run_id + "\n" + descriptor["attachment_id"])},
+            {"_id": self._item_id(run_id, descriptor["attachment_id"])},
             {
                 "$set": {
-                    "status": "completed",
+                    "status": "completed" if terminal else "failed",
                     "resource_id": resource_id,
-                    "errors": [],
+                    "errors": []
+                    if terminal
+                    else [{"error": extracted["error"] or "Reference extraction failed"}],
                     "updated_at": collected_at,
                 },
                 "$inc": {"attempts": 1},
@@ -895,13 +977,9 @@ class ReferenceStore:
 
     def fail_document(self, run_id, descriptor, error):
         self.db.portal_reference_run_items.update_one(
-            {"_id": digest(run_id + "\n" + descriptor["attachment_id"])},
+            {"_id": self._item_id(run_id, descriptor["attachment_id"])},
             {
-                "$set": {
-                    "status": "failed",
-                    "errors": [{"error": str(error)[:500]}],
-                    "updated_at": now(),
-                },
+                "$set": {"status": "failed", "errors": [{"error": error}], "updated_at": now()},
                 "$inc": {"attempts": 1},
             },
         )
@@ -909,13 +987,23 @@ class ReferenceStore:
     def report(self, run_id, *, persist=False):
         run = self.get_run(run_id)
         counts = {
-            status: self.db.portal_reference_run_items.count_documents(
-                {"run_id": run_id, "status": status}
+            state: self.db.portal_reference_run_items.count_documents(
+                {"run_id": run_id, "status": state}
             )
-            for status in ("pending", "completed", "skipped", "failed")
+            for state in ("pending", "completed", "skipped", "failed", "stale")
         }
-        status = "completed" if not counts["pending"] and not counts["failed"] else "incomplete"
-        report = {"run_id": run_id, "status": status, "types": run["types"], **counts}
+        status = (
+            "completed"
+            if run.get("selection_complete") and not counts["pending"] and not counts["failed"]
+            else "incomplete"
+        )
+        report = {
+            "run_id": run_id,
+            "status": status,
+            "types": run["types"],
+            "selection_complete": run.get("selection_complete", False),
+            **counts,
+        }
         report["selected"] = sum(counts.values())
         if persist:
             self.db.portal_reference_runs.update_one(

@@ -498,3 +498,24 @@ def test_repeated_cross_page_record_keeps_collecting_new_rows_but_stays_incomple
     assert report["status"] == "incomplete"
     assert report["streams"]["API"]["duplicate_records"] is True
     assert report["streams"]["API"]["unique_records"] == 4
+
+
+def test_detail_refresh_does_not_retire_active_reference_documents(store):
+    item_value = item(1)
+    store.db.portal_catalog.insert_one({"_id": "API:1", "list_id": 1, "data_type": "API"})
+    store.db.portal_resources.insert_one(
+        {
+            "_id": "ref",
+            "catalog_id": "API:1",
+            "kind": "reference_document",
+            "attachment_id": "reference:1",
+            "is_active": True,
+        }
+    )
+    store.db.portal_run_items.insert_one(
+        {"_id": "run-item", "run_id": "run", "catalog_id": "API:1", "status": "pending"}
+    )
+    store.save_detail(
+        "run", item_value, {"metadata": {}, "api_specs": [], "attachments": []}, [], []
+    )
+    assert store.db.portal_resources.find_one({"_id": "ref"})["is_active"] is True

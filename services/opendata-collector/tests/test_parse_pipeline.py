@@ -570,3 +570,53 @@ def test_inputs_enrich_registered_attachments_with_active_reference_documents_an
     assert store.db.parsed_api_info.find_one({"list_id": 7})["attachments"][0][
         "reference_document"
     ] == reference | {"text_sha256": "changed"}
+
+
+def test_reference_enrichment_uses_canonical_arguments_and_ignores_external_or_malformed_duplicates(
+    store,
+):
+    detail = {
+        "metadata": {},
+        "schema_org": [],
+        "api_specs": [],
+        "tables": [],
+        "detail_format": "TABLE",
+        "hidden_fields": {"publicDataPk": "7", "publicDataDetailPk": "uddi:guide"},
+        "attachments": [
+            {"name": "guide.docx", "arguments": ["7", "uddi:guide", "FILE_000000000001", 2, "x"]},
+            {
+                "name": "guide.docx",
+                "file_id": "FILE_000000000001",
+                "file_detail_sn": "2",
+                "url": "https://bad.test",
+            },
+            {"name": [], "file_id": [], "file_detail_sn": []},
+        ],
+    }
+    catalog_id = seed(store, detail=detail)
+    attachment_id = reference_attachment_identity(
+        "API:7", "7", "uddi:guide", "FILE_000000000001", "2"
+    )
+    store.db.portal_resources.insert_one(
+        {
+            "_id": "ref",
+            "catalog_id": catalog_id,
+            "kind": "reference_document",
+            "attachment_id": attachment_id,
+            "raw_id": "d",
+            "document_sha256": "d",
+            "text_raw_id": "t",
+            "text_sha256": "t",
+            "source": "official_attachment",
+            "name": "guide.docx",
+            "format": "DOCX",
+            "extraction_status": "EXTRACTED",
+            "extraction_error": None,
+            "char_count": 1,
+            "is_active": True,
+        }
+    )
+    attachments = next(store.inputs(["API"])).detail["attachments"]
+    assert attachments[0]["reference_document"]["resource_id"] == "ref"
+    assert "reference_document" not in attachments[1]
+    assert "reference_document" not in attachments[2]
