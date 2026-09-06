@@ -159,6 +159,8 @@ def _metadata_value(metadata: dict[str, Any], *labels: str) -> Any:
 def _official_record(source_records: list[dict[str, Any]]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for stored in source_records:
+        if stored.get("source") == "monthly_snapshot":
+            continue
         record = _source_record(stored)
         if not isinstance(record, dict):
             continue
@@ -175,6 +177,16 @@ MONTHLY_SOURCE_FIELDS = {
     "meta_url": ("목록 URL",),
     "org_nm": ("제공기관", "제공 기관", "제공기관명"),
     "dept_nm": ("관리부서명", "관리부서", "담당부서"),
+    "contact_name": ("담당자명", "담당자"),
+    "contact_tel": (
+        "관리부서 전화번호",
+        "관리부서전화번호",
+        "담당자 전화번호",
+        "담당자전화번호",
+        "담당자 연락처",
+        "연락처",
+    ),
+    "contact_email": ("담당자 이메일", "이메일"),
     "category_nm": ("분류체계", "카테고리", "카테고리명"),
     "data_format": ("확장자", "데이터포맷", "데이터 형식", "파일형식"),
     "created_at": ("등록일", "생성일"),
@@ -182,12 +194,18 @@ MONTHLY_SOURCE_FIELDS = {
     "published_at": ("공개일", "게시일"),
     "share_scope_nm": ("이용허락범위", "이용 허락 범위", "라이선스"),
     "download_cnt": ("다운로드수",),
+    "request_cnt": ("활용신청수", "활용 신청수"),
     "view_count": ("조회수", "열람수"),
     "provision_type": ("제공유형", "서비스유형"),
     "is_standard_data": ("표준데이터 여부", "표준데이터여부"),
     "spatial_coverage": ("공간범위",),
     "temporal_coverage": ("시간범위",),
     "end_point_url": ("서비스URL", "서비스 URL", "API URL"),
+    "api_type": ("API 유형", "API유형"),
+    "is_confirmed_for_dev": ("개발계정 자동승인", "개발계정자동승인", "개발계정 승인 여부"),
+    "is_confirmed_for_prod": ("운영계정 자동승인", "운영계정자동승인", "운영계정 승인 여부"),
+    "traffic_limit": ("일일 트래픽", "일일트래픽", "트래픽"),
+    "review_status": ("심의 여부", "심의여부", "검토 여부", "검토여부"),
 }
 
 
@@ -622,6 +640,7 @@ def _contact(
     source: dict[str, Any],
     schema: dict[str, Any],
     department: str,
+    monthly: dict[str, Any],
 ) -> dict[str, Any]:
     source_contact = _contact_parts([source.get("contact"), source.get("contact_info")])
     schema_contact = _contact_parts(schema.get("contactPoint"))
@@ -632,6 +651,7 @@ def _contact(
             source_contact.get("name"),
             schema_contact.get("name"),
             _metadata_value(metadata, "담당자명", "담당자"),
+            monthly.get("contact_name"),
         ),
         "phone": _first(
             source.get("contact_tel"),
@@ -644,12 +664,14 @@ def _contact(
                 "담당자 연락처",
                 "연락처",
             ),
+            monthly.get("contact_tel"),
         ),
         "email": _first(
             source.get("contact_email"),
             source_contact.get("email"),
             schema_contact.get("email"),
             _metadata_value(metadata, "담당자 이메일", "이메일"),
+            monthly.get("contact_email"),
         ),
         "type": _first(source_contact.get("type"), schema_contact.get("type")),
     }
@@ -660,6 +682,7 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
     catalog, detail = parse_input.catalog, parse_input.detail
     source = _official_record(parse_input.source_records)
     snapshot = _monthly_snapshot(parse_input.source_records)
+    monthly = _monthly_record(snapshot)
     metadata = detail.get("metadata", {})
     if not isinstance(metadata, dict):
         metadata = {}
@@ -668,7 +691,13 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
     if not isinstance(summary, dict):
         summary = {}
     title = _first(
-        source.get("title"), source.get("list_title"), schema.get("name"), catalog.get("title")
+        source.get("title"),
+        source.get("list_title"),
+        schema.get("name"),
+        _metadata_value(metadata, "목록명", "데이터명"),
+        monthly.get("title"),
+        monthly.get("list_title"),
+        catalog.get("title")
     )
     description = _first(
         source.get("desc"),
@@ -681,40 +710,50 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         source.get("org_nm"),
         _schema_creator(schema),
         _metadata_value(metadata, "제공기관", "소관기관", "기관명"),
+        monthly.get("org_nm"),
         summary.get("org_nm"),
     )
     department = _first(
         source.get("dept_nm"),
         _metadata_value(metadata, "관리부서명", "담당부서", "부서명"),
+        monthly.get("dept_nm"),
         organization,
     )
     category = _first(
         source.get("category_nm"),
         source.get("new_category_nm"),
         _metadata_value(metadata, "분류체계", "카테고리"),
+        monthly.get("category_nm"),
     )
     data_format = _first(
         source.get("data_format"),
         source.get("ext"),
         _metadata_value(metadata, "확장자", "데이터포맷", "포맷"),
         detail.get("detail_format"),
+        monthly.get("data_format"),
+        monthly.get("ext"),
     )
     created_at = _first_date(
         source.get("created_at"),
         source.get("reg_date"),
         schema.get("dateCreated"),
         _metadata_value(metadata, "등록일", "생성일"),
+        monthly.get("created_at"),
+        monthly.get("reg_date"),
     )
     published_at = _first_date(
         source.get("published_at"),
         schema.get("datePublished"),
         _metadata_value(metadata, "공개일", "게시일"),
+        monthly.get("published_at"),
     )
     update_at = _first_date(
         source.get("updated_at"),
         source.get("update_at"),
         schema.get("dateModified"),
         _metadata_value(metadata, "수정일", "최종수정일", "갱신일"),
+        monthly.get("updated_at"),
+        monthly.get("update_at"),
     )
     pricing = _first(source.get("is_charged"), _metadata_value(metadata, "비용부과유무"))
     license_value = _first(
@@ -723,6 +762,9 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         source.get("share_scope_reason"),
         source.get("use_prmisn_ennc"),
         _metadata_value(metadata, "이용허락범위", "이용 허락 범위", "라이선스"),
+        monthly.get("share_scope_nm"),
+        monthly.get("share_scope_reason"),
+        monthly.get("use_prmisn_ennc"),
     )
     status = (
         "completed"
@@ -775,17 +817,19 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
             schema.get("spatialCoverage"),
             _metadata_value(metadata, "공간범위"),
             source.get("spatial_coverage"),
+            monthly.get("spatial_coverage"),
         ),
         "temporal_coverage": _first(
             schema.get("temporalCoverage"),
             _metadata_value(metadata, "시간범위"),
             source.get("temporal_coverage"),
+            monthly.get("temporal_coverage"),
         ),
         "pricing_basis": _first(
             source.get("cost_unit"),
             _metadata_value(metadata, "비용부과기준 및 단위", "비용 부과기준 및 단위"),
         ),
-        "contact": _contact(metadata, source, schema, str(department)),
+        "contact": _contact(metadata, source, schema, str(department), monthly),
         "is_core_data": _first(source.get("is_core_data"), source.get("core_data_nm")),
         "pricing": pricing,
         "copyright": _first(source.get("is_copyrighted"), _metadata_value(metadata, "저작권")),
@@ -801,12 +845,26 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
             ]
         ),
         "request_cnt": _integer(
-            _first(source.get("request_cnt"), source.get("download_cnt"), default=0)
+            _first(
+                source.get("request_cnt"),
+                source.get("download_cnt"),
+                monthly.get("request_cnt"),
+                monthly.get("download_cnt"),
+                default=0,
+            )
         ),
-        "view_count": _integer(_first(source.get("view_count"), default=0)),
-        "provision_type": _first(source.get("provision_type"), default=""),
+        "view_count": _integer(
+            _first(source.get("view_count"), monthly.get("view_count"), default=0)
+        ),
+        "provision_type": _first(
+            source.get("provision_type"), monthly.get("provision_type"), default=""
+        ),
         "is_standard_data": _first(
-            source.get("is_standard_data"), source.get("is_std_data"), default=None
+            source.get("is_standard_data"),
+            source.get("is_std_data"),
+            monthly.get("is_standard_data"),
+            monthly.get("is_std_data"),
+            default=None
         ),
         "title_en": _first(source.get("title_en"), default=""),
         "register_status": _first(source.get("register_status"), default=""),
@@ -1262,11 +1320,24 @@ def _normalize_api(parse_input: ParseInput, document: dict[str, Any]) -> ParsedO
     if not endpoints:
         endpoints.extend(_source_endpoints(parse_input.source_records, document["list_id"]))
     source = _official_record(parse_input.source_records)
+    monthly = _monthly_record(_monthly_snapshot(parse_input.source_records))
     document.update(
         {
-            "api_type": _first(source.get("api_type"), default=""),
-            "api_confirm_for_dev": _first(source.get("is_confirmed_for_dev"), default=""),
-            "api_confirm_for_prod": _first(source.get("is_confirmed_for_prod"), default=""),
+            "api_type": _first(source.get("api_type"), monthly.get("api_type"), default=""),
+            "api_confirm_for_dev": _first(
+                source.get("is_confirmed_for_dev"), monthly.get("is_confirmed_for_dev"), default=""
+            ),
+            "api_confirm_for_prod": _first(
+                source.get("is_confirmed_for_prod"),
+                monthly.get("is_confirmed_for_prod"),
+                default=""
+            ),
+            "traffic_limit": _first(
+                source.get("traffic_limit"), monthly.get("traffic_limit"), default=""
+            ),
+            "review_status": _first(
+                source.get("review_status"), monthly.get("review_status"), default=""
+            ),
             "endpoints": endpoints,
             **_api_context(detail, parse_input.source_records, endpoints),
         }

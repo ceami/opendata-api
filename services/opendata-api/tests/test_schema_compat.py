@@ -295,7 +295,7 @@ def test_file_and_catalog_models_preserve_parse_status():
 
 
 
-def test_parsed_api_model_serializes_monthly_snapshot_provenance_and_flags():
+def test_parsed_api_document_construct_serializes_monthly_snapshot_fields():
     output = normalize_catalog(
         ParseInput(
             catalog={
@@ -312,7 +312,18 @@ def test_parsed_api_model_serializes_monthly_snapshot_provenance_and_flags():
             source_records=[
                 {
                     "source": "monthly_snapshot",
-                    "record": {"목록명": "monthly", "조회수": "9", "제공유형": "FILE"},
+                    "record": {
+                        "목록명": "monthly",
+                        "관리부서명": "monthly department",
+                        "관리부서 전화번호": "02-1111-2222",
+                        "API 유형": "REST",
+                        "개발계정 자동승인": "Y",
+                        "운영계정 자동승인": "N",
+                        "조회수": "9",
+                        "제공유형": "FILE",
+                        "일일 트래픽": "1,000",
+                        "심의 여부": "Y",
+                    },
                     "snapshot_run_id": "snapshot-run",
                     "snapshot_source": {"name": "monthly.csv"},
                     "snapshot_raw_sha256": "snapshot-hash",
@@ -322,11 +333,19 @@ def test_parsed_api_model_serializes_monthly_snapshot_provenance_and_flags():
         )
     )
 
-    document = ParsedAPIInfo.model_validate(output.document).model_dump(mode="json")
+    # Beanie document validation requires an initialized collection; construct preserves
+    # this concrete parser document so its Pydantic serialization can be asserted here.
+    document = ParsedAPIInfo.model_construct(**output.document).model_dump(mode="json")
 
     assert document["monthly_snapshot"] == {"목록명": "monthly", "조회수": "9", "제공유형": "FILE"}
     assert document["snapshot_run_id"] == "snapshot-run"
     assert document["snapshot_source"] == {"name": "monthly.csv"}
     assert document["snapshot_raw_sha256"] == "snapshot-hash"
+    assert document["api_type"] == "REST"
+    assert document["api_confirm_for_dev"] == "Y"
+    assert document["api_confirm_for_prod"] == "N"
+    assert document["contact"] == {"department": "monthly department", "phone": "02-1111-2222"}
     assert document["view_count"] == 9
     assert document["provision_type"] == "FILE"
+    assert document["traffic_limit"] == "1,000"
+    assert document["review_status"] == "Y"

@@ -1127,8 +1127,23 @@ def test_invalid_linked_dcat_is_explicit_partial_error():
 
 def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance():
     detail = {
-        "metadata": {"공간범위": ["detail spatial"]},
-        "schema_org": [{"@type": "Dataset", "temporalCoverage": "detail temporal"}],
+        "metadata": {
+            "공간범위": ["detail spatial"],
+            "분류체계": ["Detail category"],
+            "확장자": ["JSON"],
+            "등록일": ["2024-01-02"],
+            "수정일": ["2024-02-03"],
+        },
+        "schema_org": [
+            {
+                "@type": "Dataset",
+                "name": "Schema title",
+                "creator": {"name": "Schema organization"},
+                "dateCreated": "2024-01-01",
+                "dateModified": "2024-02-01",
+                "temporalCoverage": "detail temporal",
+            }
+        ],
         "api_specs": [],
         "attachments": [],
         "tables": [],
@@ -1158,7 +1173,7 @@ def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance(
             "API",
             detail,
             sources=[
-                {"record": {"title": "Live title", "org_nm": "Live organization"}},
+                {"record": {}},
                 {
                     "source": "monthly_snapshot",
                     "record": monthly_row,
@@ -1170,13 +1185,13 @@ def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance(
         )
     )
 
-    assert output.document["title"] == "Live title"
-    assert output.document["organization"] == "Live organization"
+    assert output.document["title"] == "Schema title"
+    assert output.document["organization"] == "Schema organization"
     assert output.document["department"] == "Monthly department"
-    assert output.document["category"] == "Monthly category"
-    assert output.document["data_format"] == "CSV"
-    assert output.document["created_at"] == datetime(2025, 1, 2, tzinfo=timezone.utc)
-    assert output.document["update_at"] == datetime(2025, 2, 3, tzinfo=timezone.utc)
+    assert output.document["category"] == "Detail category"
+    assert output.document["data_format"] == "JSON"
+    assert output.document["created_at"] == datetime(2024, 1, 1, tzinfo=timezone.utc)
+    assert output.document["update_at"] == datetime(2024, 2, 1, tzinfo=timezone.utc)
     assert output.document["license"] == "Monthly license"
     assert output.document["request_cnt"] == 56
     assert output.document["view_count"] == 1234
@@ -1189,3 +1204,51 @@ def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance(
     assert output.document["snapshot_run_id"] == "snapshot-run"
     assert output.document["snapshot_source"] == {"name": "monthly.csv"}
     assert output.document["snapshot_raw_sha256"] == "snapshot-hash"
+
+
+
+def test_monthly_snapshot_falls_back_for_contact_and_api_metadata():
+    output = normalize_catalog(
+        parse_input(
+            "API",
+            {
+                "metadata": {"담당자명": ["Detail contact"]},
+                "schema_org": [],
+                "api_specs": [],
+                "attachments": [],
+                "tables": [],
+                "detail_format": "TABLE",
+            },
+            sources=[
+                {"record": {"contact_tel": "02-9999-9999", "api_type": "SOAP"}},
+                {
+                    "source": "monthly_snapshot",
+                    "record": {
+                        "관리부서명": "Monthly department",
+                        "담당자명": "Monthly contact",
+                        "관리부서 전화번호": "02-1111-2222",
+                        "담당자 이메일": "monthly@example.test",
+                        "API 유형": "REST",
+                        "개발계정 자동승인": "Y",
+                        "운영계정 자동승인": "N",
+                        "일일 트래픽": "1,000",
+                        "심의 여부": "Y",
+                        "활용신청수": "88",
+                    },
+                },
+            ],
+        )
+    ).document
+
+    assert output["contact"] == {
+        "department": "Monthly department",
+        "name": "Detail contact",
+        "phone": "02-9999-9999",
+        "email": "monthly@example.test",
+    }
+    assert output["api_type"] == "SOAP"
+    assert output["api_confirm_for_dev"] == "Y"
+    assert output["api_confirm_for_prod"] == "N"
+    assert output["traffic_limit"] == "1,000"
+    assert output["review_status"] == "Y"
+    assert output["request_cnt"] == 88

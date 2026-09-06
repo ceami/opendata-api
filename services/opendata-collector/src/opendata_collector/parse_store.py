@@ -133,7 +133,7 @@ class ParseStore:
             )
             if snapshot_run is not None:
                 snapshot = self.db.portal_snapshot_records.find_one(
-                    {"snapshot_run_id": snapshot_run["_id"], "catalog_id": catalog["_id"]}
+                    {"run_id": snapshot_run["_id"], "catalog_id": catalog["_id"]}
                 )
                 raw_record = snapshot.get("source_record") if snapshot else None
                 if isinstance(raw_record, dict):

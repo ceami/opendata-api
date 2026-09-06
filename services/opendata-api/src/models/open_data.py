@@ -245,6 +245,8 @@ class ParsedMetadata(BaseModel):
     view_count: int = 0
     provision_type: str = ""
     is_standard_data: Any | None = None
+    traffic_limit: str = ""
+    review_status: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
     schema_org: dict[str, Any] = Field(default_factory=dict)
     schema_org_raw: list[dict[str, Any]] = Field(default_factory=list)

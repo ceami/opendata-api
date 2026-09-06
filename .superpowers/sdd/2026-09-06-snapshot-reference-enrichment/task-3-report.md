@@ -53,3 +53,28 @@ Trying the collector pytest environment instead reached the API test configurati
 ## Scope and concerns
 
 The only pre-existing working-tree change is the untracked plan at `docs/superpowers/plans/2026-09-06-snapshot-reference-enrichment.md`; it is not part of this task. The API compatibility test is committed but should be rerun in the fully provisioned API test environment during Task 6.
+
+## Review-fix addendum
+
+The review found three important defects. This follow-up corrects each one.
+
+- Snapshot rows are no longer merged into the live source record. Shared fields now select live source, then schema/detail metadata, then the normalized monthly row, then listing/catalog fallback. Regression coverage verifies title, organization, category, format, created date, and update date retain schema/detail values while blank department/license/count/flag/API URL fields use the snapshot.
+- Added monthly aliases for contact name, email, and phone labels including `관리부서 전화번호`, `담당자 전화번호`, and `연락처`; API aliases cover API type, development/production confirmation, traffic, review status, and application traffic/counts. `traffic_limit` and `review_status` are explicit parsed/API model fields. The regression test verifies live contact/API values and detail contact metadata win, while blank values fall back to the monthly row.
+- Snapshot record lookup now uses `{run_id, catalog_id}`, matching the immutable storage compound index. The ParseStore regression initializes `SnapshotStore` and asserts that exact compound index exists before reading the selected completed generation.
+
+Additional validation after review fixes:
+
+```text
+cd services/opendata-collector
+uv run pytest tests/test_parse_pipeline.py tests/test_parse_normalizers.py -q
+42 passed in 0.19s
+
+uv run ruff check src/opendata_collector/parse_store.py src/opendata_collector/parse_normalizers.py tests/test_parse_pipeline.py tests/test_parse_normalizers.py
+All checks passed!
+
+cd services/opendata-api
+../opendata-collector/.venv/bin/ruff check --select E,F,I --ignore E501 src/models/open_data.py tests/test_schema_compat.py
+All checks passed!
+```
+
+The API schema compatibility test now uses `ParsedAPIInfo.model_construct(**output.document).model_dump(mode="json")` to assert concrete parsed document fields without initialized Beanie collections. A direct command using the API virtual environment plus collector dependencies passed for contact, API type, confirmation, traffic, and review fields. API pytest remains unavailable because `services/opendata-api/.venv` does not include `pytest`; this is unchanged from the original report.

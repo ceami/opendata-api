@@ -8,7 +8,7 @@ from mongomock.gridfs import enable_gridfs_integration
 from opendata_collector.parse_normalizers import PARSER_VERSION, normalize_catalog
 from opendata_collector.parse_pipeline import ParsePipeline
 from opendata_collector.parse_store import ParseStore
-from opendata_collector.store import MongoStore
+from opendata_collector.store import MongoStore, SnapshotStore
 
 enable_gridfs_integration()
 NOW = datetime(2026, 9, 6, tzinfo=timezone.utc)
@@ -110,6 +110,7 @@ def test_inputs_use_latest_completed_snapshot_as_a_low_priority_source(store):
             {
                 "_id": "completed:FILE:7",
                 "snapshot_run_id": "completed",
+                "run_id": "completed",
                 "catalog_id": catalog_id,
                 "data_type": "FILE",
                 "list_id": 7,
@@ -118,6 +119,7 @@ def test_inputs_use_latest_completed_snapshot_as_a_low_priority_source(store):
             {
                 "_id": "running:FILE:7",
                 "snapshot_run_id": "running",
+                "run_id": "running",
                 "catalog_id": catalog_id,
                 "data_type": "FILE",
                 "list_id": 7,
@@ -125,6 +127,12 @@ def test_inputs_use_latest_completed_snapshot_as_a_low_priority_source(store):
             },
         ]
     )
+
+    SnapshotStore(store.db).initialize()
+    index_keys = {
+        tuple(index["key"].items()) for index in store.db.portal_snapshot_records.list_indexes()
+    }
+    assert (("run_id", 1), ("catalog_id", 1)) in index_keys
 
     first = next(store.inputs(["FILE"]))
 
