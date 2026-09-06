@@ -469,7 +469,6 @@ class SnapshotStore:
             migrated["catalog_id"] = catalog_id
             migrated["migrated_at"] = now()
             for field in (
-                "snapshot_run_id",
                 "published_run",
                 "last_seen_run",
                 "last_seen_at",

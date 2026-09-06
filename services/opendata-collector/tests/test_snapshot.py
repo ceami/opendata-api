@@ -436,7 +436,8 @@ def test_failed_generation_does_not_attempt_rollback_compensation(snapshot_pipel
     assert failed["status"] == "failed"
 
 
-def test_initialize_migrates_completed_legacy_rows_and_only_drops_legacy_unique_index():
+@pytest.mark.parametrize("repeat_initialize", [False, True])
+def test_initialize_migrates_completed_legacy_rows_on_first_pass_and_preserves_indexes(repeat_initialize):
     database = mongomock.MongoClient(tz_aware=True).snapshot_migration
     records = database.portal_snapshot_records
     records.create_index([("data_type", 1), ("list_id", 1)], unique=True, name="legacy_identity")
@@ -467,7 +468,6 @@ def test_initialize_migrates_completed_legacy_rows_and_only_drops_legacy_unique_
 
     store = store_module.SnapshotStore(database)
     store.initialize()
-    store.initialize()
 
     names = {index["name"] for index in records.list_indexes()}
     current = list(store.current_records())
@@ -475,9 +475,19 @@ def test_initialize_migrates_completed_legacy_rows_and_only_drops_legacy_unique_
     assert "preserve_other_unique" in names
     assert "run_id_1_catalog_id_1" in names
     assert records.find_one({"_id": "FILE:1"}) is None
+    assert store.latest_completed_run()["_id"] == run_id
+    assert len(current) == 1
     assert current[0]["_id"] == f"{run_id}:FILE:1"
     assert current[0]["run_id"] == run_id
+    assert current[0]["snapshot_run_id"] == run_id
+    assert current[0]["title"] == "Legacy"
+    assert current[0]["source_hash"] == "legacy-source"
     assert database.portal_snapshot_runs.find_one({"_id": run_id})["completed_at"] is not None
+
+    if repeat_initialize:
+        store.initialize()
+        assert list(store.current_records()) == current
+        assert records.count_documents({}) == 1
 
 
 def test_initialize_can_resume_after_copying_a_legacy_row_before_its_delete(monkeypatch):
@@ -512,13 +522,17 @@ def test_initialize_can_resume_after_copying_a_legacy_row_before_its_delete(monk
     )
     with pytest.raises(RuntimeError, match="delete interrupted"):
         store.initialize()
-    assert records.find_one({"_id": f"{run_id}:FILE:1"}) is not None
+    current = list(store.current_records())
+    assert len(current) == 1
+    assert current[0]["_id"] == f"{run_id}:FILE:1"
+    assert current[0]["snapshot_run_id"] == run_id
     assert records.find_one({"_id": "FILE:1"}) is not None
 
     monkeypatch.setattr(records, "delete_one", original_delete)
     store.initialize()
     assert records.find_one({"_id": "FILE:1"}) is None
     assert records.count_documents({"run_id": run_id}) == 1
+    assert list(store.current_records()) == current
 
 
 def test_initialize_leaves_running_and_failed_legacy_rows_unpublished():
