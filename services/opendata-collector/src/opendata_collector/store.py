@@ -429,6 +429,7 @@ class SnapshotStore:
             [("run_id", 1), ("catalog_id", 1)], unique=True
         )
         self.db.portal_snapshot_records.create_index([("run_id", 1), ("data_type", 1)])
+        self.db.portal_snapshot_records.create_index("snapshot_run_id")
         self.db.portal_snapshot_runs.create_index([("status", 1), ("completed_at", -1)])
         self.db.portal_snapshot_runs.create_index("raw_sha256")
 
@@ -642,7 +643,8 @@ class SnapshotStore:
                 {
                     "$set": {
                         "status": "failed",
-                        "error": str(error),
+                        "error": "Snapshot persistence failed",
+                        "error_type": type(error).__name__,
                         "failed_at": now(),
                         "updated_at": now(),
                     }
@@ -662,7 +664,14 @@ class SnapshotStore:
                 sort=[("completed_at", -1), ("_id", -1)],
             )
             if existing is not None and self._generation_matches(existing, rows):
-                return existing["summary"]
+                return {
+                    **existing["summary"],
+                    "source": source,
+                    "reconciliation": self.reconciliation(existing["_id"]),
+                    "reconciled_at": now(),
+                    "reused_generation": True,
+                    "publication_summary": existing["summary"],
+                }
             self._assert_complete_enough(rows)
             raw_id = self.save_raw(raw_content)
             run = self.start_run(
@@ -681,6 +690,8 @@ class SnapshotStore:
                 "raw_sha256": raw_sha256,
                 "record_count": len(rows),
                 "reconciliation": reconciliation,
+                "reconciled_at": now(),
+                "reused_generation": False,
             }
             result = self.db.portal_snapshot_runs.update_one(
                 {"_id": run["_id"], "status": "running"},
@@ -747,6 +758,68 @@ class ReferenceStore:
         )
         self.db.portal_resources.create_index(
             [("catalog_id", 1), ("kind", 1), ("attachment_id", 1)]
+        )
+        self.db.portal_resources.create_index(
+            "reference_head",
+            unique=True,
+            sparse=True,
+            name="reference_head_identity",
+        )
+        self._migrate_reference_heads()
+
+    @staticmethod
+    def head_id(catalog_id, attachment_id):
+        return "reference-head:" + digest(catalog_id + "\n" + attachment_id)
+
+    def _migrate_reference_heads(self):
+        """Copy the newest successful legacy revision before retiring any legacy row.
+
+        Existing heads (including inactive tombstones) always win. A retry after an
+        interrupted cleanup cannot republish a stale revision or replace a refresh.
+        """
+        legacy_query = {
+            "kind": "reference_document",
+            "reference_head": {"$exists": False},
+            "is_active": {"$ne": False},
+        }
+        candidates = self.db.portal_resources.find(
+            {**legacy_query, "extraction_status": {"$in": list(self.SUCCESS_STATUSES)}}
+        ).sort([("collected_at", -1), ("_id", -1)])
+        for legacy in candidates:
+            catalog_id, attachment_id = legacy.get("catalog_id"), legacy.get("attachment_id")
+            if not catalog_id or not attachment_id:
+                continue
+            fields = {key: value for key, value in legacy.items() if key != "_id"}
+            fields.update(
+                reference_head=self.head_id(catalog_id, attachment_id),
+                content_type=legacy.get("content_type") or "application/octet-stream",
+                fetched_at=legacy.get("fetched_at", legacy.get("collected_at")),
+            )
+            self.db.portal_resources.update_one(
+                {"_id": self.head_id(catalog_id, attachment_id)},
+                {"$setOnInsert": fields},
+                upsert=True,
+            )
+            self.db.portal_resources.update_many(
+                {**legacy_query, "catalog_id": catalog_id, "attachment_id": attachment_id},
+                {"$set": {"is_active": False, "removed_at": now()}},
+            )
+
+    def reconcile_membership(self, catalog, detail, descriptors):
+        """Retire absent identities only when a complete detail is trustworthy."""
+        from .reference_docs import reference_membership_complete
+
+        if not reference_membership_complete(catalog, detail):
+            return
+        self.db.portal_resources.update_many(
+            {
+                "catalog_id": catalog["_id"],
+                "kind": "reference_document",
+                "reference_head": {"$exists": True},
+                "attachment_id": {"$nin": [value["attachment_id"] for value in descriptors]},
+                "is_active": {"$ne": False},
+            },
+            {"$set": {"is_active": False, "removed_at": now()}},
         )
 
     def save_raw(self, content):
@@ -823,9 +896,9 @@ class ReferenceStore:
     def add_item(self, run_id, descriptor, *, force):
         existing = self.db.portal_resources.find_one(
             {
-                "catalog_id": descriptor["catalog_id"],
+                "_id": self.head_id(descriptor["catalog_id"], descriptor["attachment_id"]),
                 "kind": "reference_document",
-                "attachment_id": descriptor["attachment_id"],
+                "reference_head": {"$exists": True},
                 "is_active": {"$ne": False},
                 "extraction_status": {"$in": list(self.SUCCESS_STATUSES)},
             },
@@ -928,24 +1001,17 @@ class ReferenceStore:
     def save_document(self, run_id, descriptor, resource, extracted):
         raw_id = self.save_raw(resource.content)
         text_raw_id = self.save_raw(extracted["text"].encode("utf-8"))
-        resource_id = digest(
-            "\n".join(
-                (
-                    descriptor["catalog_id"],
-                    descriptor["attachment_id"],
-                    raw_id,
-                    text_raw_id,
-                    extracted["status"],
-                )
-            )
-        )
+        resource_id = self.head_id(descriptor["catalog_id"], descriptor["attachment_id"])
         terminal = extracted["status"] in self.SUCCESS_STATUSES
         collected_at = now()
         fields = {
             "catalog_id": descriptor["catalog_id"],
             "kind": "reference_document",
+            "reference_head": resource_id,
             "attachment_id": descriptor["attachment_id"],
             "url": resource.url,
+            "content_type": resource.content_type,
+            "fetched_at": resource.fetched_at,
             "source": "official_attachment",
             "name": descriptor["name"],
             "format": descriptor["format"],
@@ -964,26 +1030,23 @@ class ReferenceStore:
             "collected_at": collected_at,
             "is_active": terminal,
         }
-        self.db.portal_resources.update_one(
-            {"_id": resource_id}, {"$set": fields, "$unset": {"removed_at": ""}}, upsert=True
-        )
         if terminal:
-            self.db.portal_resources.update_many(
-                {
-                    "catalog_id": descriptor["catalog_id"],
-                    "kind": "reference_document",
-                    "attachment_id": descriptor["attachment_id"],
-                    "_id": {"$ne": resource_id},
-                    "is_active": {"$ne": False},
-                },
-                {"$set": {"is_active": False, "removed_at": collected_at}},
+            # Both immutable blobs are durable before this single-document publication.
+            # A failed extraction or publication cannot alter the previous usable head.
+            self.db.portal_resources.update_one(
+                {"_id": resource_id},
+                {"$set": fields, "$unset": {"removed_at": ""}},
+                upsert=True,
             )
         self.db.portal_reference_run_items.update_one(
             {"_id": self._item_id(run_id, descriptor["attachment_id"])},
             {
                 "$set": {
                     "status": "completed" if terminal else "failed",
-                    "resource_id": resource_id,
+                    "resource_id": resource_id if terminal else None,
+                    "raw_id": raw_id,
+                    "text_raw_id": text_raw_id,
+                    "extraction_status": extracted["status"],
                     "errors": []
                     if terminal
                     else [{"error": extracted["error"] or "Reference extraction failed"}],

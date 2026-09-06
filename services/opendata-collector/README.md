@@ -109,11 +109,19 @@ uv run --env-file ../../.env.dev opendata-collect parse
 
 월간 CSV는 전체 바이트·인코딩·필수 헤더·유형·목록 ID·상세 URL을 먼저 검증한 뒤에만 공개한다. 원본 CSV는 SHA-256 주소의 gzip GridFS blob으로 `portal_raw.files/chunks`에 저장하고, provenance(`source`, `raw_id`, `raw_sha256`, record hash, 원본 행)는 `portal_snapshot_runs`와 `portal_snapshot_records`에 남긴다. 완료 generation만 현재 generation으로 읽히며, 보고서의 `matched`·`snapshot_only`·`current_only` 대조는 **활성 API/FILE/STD** live `portal_catalog`만을 모집단으로 한다. 비활성 레코드와 LINKED 유형은 이 대조에서 제외된다. 실패하거나 지나치게 작은 CSV는 이전 완료 generation을 바꾸지 않는다. 기본 CSV/로컬 replay 한도는 **256 MiB**이고 `--max-bytes`로 더 낮출 수 있다. 이 명령은 `portal_catalog`, 기존 projection, AI 문서를 쓰지 않는다.
 
+동일 CSV를 다시 실행하면 원본 blob과 immutable generation 행을 재사용하지만, 반환 보고서의 `reconciliation`은 실행 시점의 활성 live 카탈로그와 다시 계산한다. `reused_generation`, `reconciled_at`으로 재사용 여부와 대조 시각을 표시하며, 재사용 시 `publication_summary`에는 최초 공개 시점의 보고서를 별도로 담는다. 저장된 최초 보고서는 바뀌지 않는다.
+
 `parse`는 최신 완료 `portal_snapshot_runs`의 같은 카탈로그 행을 live 원천 뒤에 추가한다. 따라서 live 목록·상세의 값이 우선하고 빈 값만 월간 행으로 보완된다. parsed 문서에는 원본 월간 열(`monthly_snapshot`)과 `snapshot_run_id`, `snapshot_source`, `snapshot_raw_sha256`가 함께 남는다.
 
 `references`는 이미 수집된 활성 카탈로그의 data.go.kr 등록 첨부 중 PDF, DOCX, HWP, HWPX만 고른다. 등록 첨부 식별자와 다운로드 URL, 문서 원본/텍스트 SHA-256 GridFS 참조, 추출 상태·오류·문자 수는 `portal_reference_runs`, `portal_reference_run_items`, 그리고 `kind="reference_document"`인 `portal_resources`에 저장된다. `parse`는 이 metadata를 해당 `detail.attachments[].reference_document`에 다시 연결한다. 일반 상세·DCAT·OpenAPI resource는 reference refresh에서 retire하지 않는다.
 
-참고문서의 기본 다운로드 한도는 파일당 **32 MiB**, 텍스트 한도는 **1,000,000자**다. 추출기는 PDF 페이지·스트림, 압축 archive, HWP stream도 별도 제한으로 검사한다. `--max-bytes`와 `--max-chars`로 더 엄격하게 제한할 수 있다. `--force`는 이미 성공한 같은 첨부도 다시 처리하고, `--resume RUN_ID`는 실패·보류 checkpoint를 다시 시도하며 최초 run에 저장한 대상·한도를 그대로 사용한다. 완료 run은 재개할 수 없다.
+각 canonical 첨부 ID에는 안정적인 ID를 갖는 resource head 하나만 공개된다. `reference_head`는 이 head의 ID이고 sparse unique index로 중복을 막는다. 성공한 원문·텍스트 blob을 저장한 다음 head를 단일 MongoDB update로 교체하며, 다운로드·추출·공개 실패는 이전 head를 바꾸지 않는다. 실패한 추출의 원본 hash와 상태는 run item에 남고, 이전 원문·텍스트 blob은 유지된다. API와 `parse`, 재수집 skip 판정은 head만 사용한다.
+
+이전 버전의 revision resource가 있으면 `references` 시작 시 가장 최근 성공 revision을 head로 복사한 뒤 기존 revision을 비활성화한다. 이 마이그레이션은 모든 유형에 적용되고 반복 실행할 수 있으며, 복사나 정리 중 실패하면 같은 명령을 다시 실행한다. 기존 head는 덮어쓰지 않는다. 업그레이드 시 **collector의 이 마이그레이션을 완료한 뒤 head만 읽는 API/parse 버전을 사용**한다. 원문·텍스트 blob과 비활성 revision은 삭제하지 않는다.
+
+완료된 상세 관찰에서 사라지거나 canonical ID가 교체된 참고문서는 다음 `references` 실행·재개에서 비활성화한다. 이 대조는 선택 유형 전체에 적용되고 `--limit`은 다운로드 대상 수만 제한하므로 0개 선택이나 한도 이후 카탈로그에서도 누락 ID를 정리한다. partial/failed 상세, 읽을 수 없는 원문, 첨부 목록·식별자 검증 실패에서는 이전 head를 유지한다.
+
+참고문서의 기본 다운로드 한도는 파일당 **32 MiB**, 텍스트 한도는 **1,000,000자**다. 추출기는 PDF 페이지·스트림, 압축 archive, HWP stream도 별도 제한으로 검사한다. `--max-bytes`와 `--max-chars`로 더 엄격하게 제한할 수 있다. `--force`는 이미 성공한 같은 첨부도 다시 처리하고, `--resume RUN_ID`는 실패·보류 checkpoint를 다시 시도하며 최초 run에 저장한 대상·한도를 그대로 사용한다. 완료 run은 재개할 수 없다. 실행·재개 ID는 작업 시작 시 stderr에 즉시 출력하고, 최종 JSON 보고서는 stdout에 출력한다.
 
 포털의 일시 오류, 다운로드 초과, 손상 파일, 사라진 첨부, 수집 상세 원문 누락은 문서별 오류 또는 `stale` 상태로 기록된다. 이런 provider-side 부분 실패가 남으면 reference run은 `incomplete`, 종료코드 2가 되며 이전 정상 reference resource는 유지된다. 재개 후 실패가 해소되면 완료될 수 있다. 이 단계는 공개 메타데이터의 허용된 data.go.kr 다운로드 경로만 요청하며, `ODP_SERVICE_KEY`가 필요 없고 개별 업무 API를 호출하지 않는다.
 
@@ -133,7 +141,7 @@ uv run --env-file ../../.env.dev opendata-collect parse \
 uv run --env-file ../../.env.dev opendata-collect parse --force
 ```
 
-파싱 결과는 `list_id`로 upsert합니다. 원천 필드·상세 JSON·활성 리소스 ID와 parser version으로 fingerprint를 계산하여 변경이 없는 문서는 건너뜁니다. 원천이 바뀌거나 parser version이 올라가면 다시 파싱합니다. 기존 중복 `parsed_api_info`/`parsed_file_info` 문서는 해당 ID를 처리할 때 최신 `parsed_at`의 `_id` 하나를 유지합니다. 현재 parser version은 `2`이며 기존 version `1` 문서는 다음 `parse` 실행에서 자동으로 다시 파싱됩니다.
+파싱 결과는 `list_id`로 upsert합니다. 원천 필드·상세 JSON·활성 리소스 ID와 parser version으로 fingerprint를 계산하여 변경이 없는 문서는 건너뜁니다. 원천이 바뀌거나 parser version이 올라가면 다시 파싱합니다. 기존 중복 `parsed_api_info`/`parsed_file_info` 문서는 해당 ID를 처리할 때 최신 `parsed_at`의 `_id` 하나를 유지합니다. 현재 parser version은 `3`이며 기존 version `1`·`2` 문서는 다음 `parse` 실행에서 자동으로 다시 파싱됩니다.
 
 모든 parsed 문서는 상세 URL, 제공기관·부서·연락처, 등록·공개·수정일, 라이선스·보유근거, 갱신주기, 매체·행 수, 공간·시간 범위와 원본 metadata/schema.org/첨부자료를 보존합니다. 날짜는 UTC로 정규화하되 유효한 원천 날짜가 없으면 `null`로 둡니다.
 

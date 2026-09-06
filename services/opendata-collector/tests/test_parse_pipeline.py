@@ -523,6 +523,7 @@ def test_inputs_enrich_registered_attachments_with_active_reference_documents_an
     store.db.portal_resources.insert_one(
         {
             "_id": "reference-resource",
+            "reference_head": "reference-resource",
             "catalog_id": catalog_id,
             "kind": "reference_document",
             "attachment_id": reference_attachment_identity(
@@ -600,6 +601,7 @@ def test_reference_enrichment_uses_canonical_arguments_and_ignores_external_or_m
     store.db.portal_resources.insert_one(
         {
             "_id": "ref",
+            "reference_head": "ref",
             "catalog_id": catalog_id,
             "kind": "reference_document",
             "attachment_id": attachment_id,

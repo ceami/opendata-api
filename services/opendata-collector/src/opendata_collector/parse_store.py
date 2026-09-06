@@ -139,7 +139,14 @@ class ParseStore:
             )
             stored_resources = list(
                 self.db.portal_resources.find(
-                    {"catalog_id": catalog["_id"], "is_active": {"$ne": False}}
+                    {
+                        "catalog_id": catalog["_id"],
+                        "is_active": {"$ne": False},
+                        "$or": [
+                            {"kind": {"$ne": "reference_document"}},
+                            {"reference_head": {"$exists": True}},
+                        ],
+                    }
                 ).sort("_id", 1)
             )
             if snapshot_run is not None:

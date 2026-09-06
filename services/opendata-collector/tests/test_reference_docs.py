@@ -148,7 +148,7 @@ def test_reference_pipeline_skips_completed_descriptors_resumes_failures_and_for
     assert len(retry_http.calls) == 2
 
 
-def test_successful_reference_refresh_retires_only_its_previous_attachment_resource(monkeypatch):
+def test_successful_reference_refresh_replaces_only_its_attachment_head(monkeypatch):
     store = reference_store_with_catalogs(file=False)
     http = ReferenceHTTP(b"revision one")
     monkeypatch.setattr(
@@ -172,8 +172,9 @@ def test_successful_reference_refresh_retires_only_its_previous_attachment_resou
     resources = list(
         store.db.portal_resources.find({"catalog_id": "API:15129394", "kind": "reference_document"})
     )
-    assert len(resources) == 2
-    assert len([value for value in resources if value["is_active"]]) == 1
+    assert len(resources) == 1
+    assert resources[0]["is_active"] is True
+    assert gzip.decompress(store.raw.get(resources[0]["raw_id"]).read()) == b"revision two"
     assert store.db.portal_resources.find_one({"_id": "dcat"})["is_active"] is True
 
 
@@ -662,8 +663,10 @@ def test_reference_resume_uses_persisted_limits_and_retries_malformed_content(mo
     )
     first = ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=2)
     assert first["status"] == "incomplete"
-    resource = store.db.portal_resources.find_one({"kind": "reference_document"})
-    assert resource["is_active"] is False
+    assert store.db.portal_resources.find_one({"kind": "reference_document"}) is None
+    checkpoint = store.db.portal_reference_run_items.find_one({"run_id": first["run_id"]})
+    assert checkpoint["extraction_status"] == "MALFORMED"
+    assert gzip.decompress(store.raw.get(checkpoint["raw_id"]).read()) == b"long document"
     assert store.db.portal_reference_runs.find_one({"_id": first["run_id"]})["max_chars"] == 2
 
     observed = {}
@@ -784,7 +787,8 @@ def test_unreadable_current_detail_stays_retryable_and_same_bytes_failed_force_k
     )
     retry = ReferencePipeline(store, http).run(resume=failed["run_id"])
     assert retry["status"] == "incomplete"
-    assert retry["failed"] == 1
+    # Both the unreadable catalog observation and its pending document stay retryable.
+    assert retry["failed"] == 2
     assert retry["stale"] == 0
 
 

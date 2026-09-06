@@ -5,6 +5,7 @@ import io
 import json
 import re
 import struct
+import sys
 import threading
 import zipfile
 import zlib
@@ -171,6 +172,30 @@ def reference_download_url(file_id, file_detail_sn, name):
         + "?"
         + urlencode({"atchFileId": file_id, "fileDetailSn": file_detail_sn, "dataNm": name})
     )
+
+
+def reference_membership_complete(catalog, detail):
+    """Whether a collected detail can establish absence of a reference identity."""
+    if catalog.get("detail_status") != "completed" or catalog.get("detail_errors"):
+        return False
+    attachments = detail.get("attachments")
+    if not isinstance(attachments, list):
+        return False
+    item = {**catalog, "catalog_id": catalog["_id"]}
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            return False
+        name = attachment.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return False
+        if attachment.get("url"):
+            continue
+        if (
+            detect_reference_format(name)
+            and _attachment_identifiers(item, detail, attachment) is None
+        ):
+            return False
+    return True
 
 
 def select_reference_attachments(item, detail):
@@ -737,6 +762,7 @@ class ReferencePipeline:
             ):
                 raise ValueError("Invalid reference limits")
             run = self.store.start_run(selected_types, limit, max_bytes, max_chars, bool(force))
+        print(f"Reference run ID: {run['_id']}", file=sys.stderr, flush=True)
         # Saved configuration is authoritative for every resume.
         selected_types, limit, max_bytes, max_chars, force = (
             run["types"],
@@ -745,27 +771,30 @@ class ReferencePipeline:
             run["max_chars"],
             run["force"],
         )
-        if self.store.needs_selection(run["_id"]):
-            selected = 0
-            selection_ok = True
-            try:
-                for catalog, detail, error in self.store.catalogs(selected_types):
-                    if error:
-                        self.store.catalog_error(run["_id"], catalog["_id"], error)
-                        continue
-                    self.store.catalog_loaded(run["_id"], catalog["_id"])
-                    item = {**catalog, "catalog_id": catalog["_id"]}
-                    for descriptor in select_reference_attachments(item, detail):
+        needs_selection = self.store.needs_selection(run["_id"])
+        selected = 0
+        selection_ok = True
+        try:
+            # Reconcile every catalog on every invocation, independently of the
+            # download limit and whether a resume needs to add new checkpoints.
+            for catalog, detail, error in self.store.catalogs(selected_types):
+                if error:
+                    self.store.catalog_error(run["_id"], catalog["_id"], error)
+                    continue
+                item = {**catalog, "catalog_id": catalog["_id"]}
+                descriptors = select_reference_attachments(item, detail)
+                self.store.reconcile_membership(catalog, detail, descriptors)
+                self.store.catalog_loaded(run["_id"], catalog["_id"])
+                if needs_selection:
+                    for descriptor in descriptors:
                         if limit is not None and selected >= limit:
                             break
                         self.store.add_item(run["_id"], descriptor, force=force)
                         selected += 1
-                    if limit is not None and selected >= limit:
-                        break
-            except Exception:
-                selection_ok = False
-            self.store.selection_complete(run["_id"], selection_ok)
-            run = self.store.get_run(run["_id"])
+        except Exception:
+            selection_ok = False
+        self.store.selection_complete(run["_id"], selection_ok)
+        run = self.store.get_run(run["_id"])
         if run.get("selection_complete"):
             for item in self.store.pending(run["_id"]):
                 descriptor, lookup_error = self.store.current_descriptor(item["descriptor"])

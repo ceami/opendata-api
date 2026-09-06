@@ -304,3 +304,93 @@ async def test_inactive_source_and_resource_history_is_hidden(client, database):
     assert sources["total"] == 1
     assert resources["total"] == 1
     assert stale_raw.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_generated_reference_resource_lists_validates_and_downloads(
+    client, database
+):
+    import io
+    import zipfile
+
+    from opendata_collector.reference_docs import ReferencePipeline
+    from opendata_collector.store import ReferenceStore
+
+    from api.v1.application.catalog.dto import ResourceDTO
+
+    item = seed(database)
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+        )
+        archive.writestr(
+            "_rels/.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+        )
+        archive.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>Guide text</w:t></w:r></w:p></w:body></w:document>',
+        )
+    content = payload.getvalue()
+    store = ReferenceStore(database.delegate)
+    MongoStore(database.delegate).save_detail(
+        "detail-refresh",
+        item,
+        {
+            "hidden_fields": {
+                "publicDataPk": "7",
+                "publicDataDetailPk": "uddi:guide",
+            },
+            "attachments": [
+                {
+                    "name": "guide.docx",
+                    "file_id": "FILE_guide",
+                    "file_detail_sn": "1",
+                }
+            ],
+        },
+        [],
+        [],
+    )
+
+    class HTTP:
+        def get(self, url, *, kind):
+            return Resource(
+                url,
+                content,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                NOW,
+                kind,
+            )
+
+    report = ReferencePipeline(store, HTTP()).run()
+    assert report["completed"] == 1
+    response = await client.get("/api/v1/catalog/API/7/resources")
+    assert response.status_code == 200
+    resources = response.json()
+    assert resources["total"] == 1
+    resource_id = resources["items"][0]["resourceId"]
+    stored = store.db.portal_resources.find_one({"_id": resource_id})
+    validated = ResourceDTO(resource_id=resource_id, **stored)
+    assert (
+        validated.content_type
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    assert validated.fetched_at == NOW
+    raw = await client.get(f"/api/v1/catalog/API/7/resources/{resource_id}/raw")
+    assert raw.status_code == 200
+    assert raw.content == content
+    # Interrupted legacy retirement must not expose a second revision to any reader.
+    legacy = {
+        key: value for key, value in stored.items() if key != "reference_head"
+    }
+    legacy["_id"] = "legacy-reference-revision"
+    store.db.portal_resources.insert_one(legacy)
+    resources = (await client.get("/api/v1/catalog/API/7/resources")).json()
+    assert resources["total"] == 1
+    hidden = await client.get(
+        "/api/v1/catalog/API/7/resources/legacy-reference-revision/raw"
+    )
+    assert hidden.status_code == 404

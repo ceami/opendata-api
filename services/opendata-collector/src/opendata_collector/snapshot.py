@@ -79,44 +79,48 @@ def _detail_identity(url, list_id, data_type):
 
 def parse_snapshot_csv(payload):
     """Return normalized catalog rows after validating the entire CSV structure."""
-    reader = csv.DictReader(io.StringIO(_decode_csv(payload), newline=""))
-    fieldnames = reader.fieldnames
-    if (
-        not fieldnames
-        or any(not isinstance(name, str) or not name.strip() for name in fieldnames)
-        or len(set(fieldnames)) != len(fieldnames)
-        or not set(REQUIRED_HEADERS).issubset(fieldnames)
-    ):
-        raise ValueError("Snapshot CSV is missing required headers")
-    seen = set()
-    items = []
-    for row in reader:
-        if None in row or any(value is None for value in row.values()):
-            raise ValueError("Snapshot CSV row has an unexpected number of columns")
-        list_id = _list_id(row["목록키"])
-        data_type = _normalize_type(row["목록유형"])
-        detail_url = _detail_identity(row["목록 URL"], list_id, data_type)
-        title = row["목록명"].strip()
-        if not title:
-            raise ValueError("Snapshot row has no catalog title")
-        catalog_id = f"{data_type}:{list_id}"
-        if catalog_id in seen:
-            raise ValueError("Snapshot CSV has duplicate catalog identity")
-        seen.add(catalog_id)
-        items.append(
-            {
-                "catalog_id": catalog_id,
-                "data_type": data_type,
-                "list_id": list_id,
-                "detail_url": detail_url,
-                "title": title,
-                "source_id": f"snapshot:{catalog_id}",
-                "source_record": dict(row),
-            }
-        )
-    if not items:
-        raise ValueError("Snapshot CSV has no catalog rows")
-    return items
+    try:
+        reader = csv.DictReader(io.StringIO(_decode_csv(payload), newline=""), strict=True)
+        fieldnames = reader.fieldnames
+        if (
+            not fieldnames
+            or any(not isinstance(name, str) or not name.strip() for name in fieldnames)
+            or len(set(fieldnames)) != len(fieldnames)
+            or not set(REQUIRED_HEADERS).issubset(fieldnames)
+        ):
+            raise ValueError("Snapshot CSV is missing required headers")
+        seen = set()
+        items = []
+        for row in reader:
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError("Snapshot CSV row has an unexpected number of columns")
+            list_id = _list_id(row["목록키"])
+            data_type = _normalize_type(row["목록유형"])
+            detail_url = _detail_identity(row["목록 URL"], list_id, data_type)
+            title = row["목록명"].strip()
+            if not title:
+                raise ValueError("Snapshot row has no catalog title")
+            catalog_id = f"{data_type}:{list_id}"
+            if catalog_id in seen:
+                raise ValueError("Snapshot CSV has duplicate catalog identity")
+            seen.add(catalog_id)
+            items.append(
+                {
+                    "catalog_id": catalog_id,
+                    "data_type": data_type,
+                    "list_id": list_id,
+                    "detail_url": detail_url,
+                    "title": title,
+                    "source_id": f"snapshot:{catalog_id}",
+                    "source_record": dict(row),
+                }
+            )
+        if not items:
+            raise ValueError("Snapshot CSV has no catalog rows")
+        return items
+
+    except csv.Error:
+        raise ValueError("Snapshot CSV has malformed quoting or structure") from None
 
 
 def _snapshot_attachment(html):

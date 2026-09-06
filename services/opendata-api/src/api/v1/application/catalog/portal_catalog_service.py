@@ -158,6 +158,10 @@ class PortalCatalogService:
         query = {
             "catalog_id": catalog["_id"],
             "is_active": {"$ne": False},
+            "$or": [
+                {"kind": {"$ne": "reference_document"}},
+                {"reference_head": {"$exists": True}},
+            ],
         }
         total = await self.db.portal_resources.count_documents(query)
         rows = await (
@@ -179,6 +183,10 @@ class PortalCatalogService:
                 "_id": resource_id,
                 "catalog_id": catalog["_id"],
                 "is_active": {"$ne": False},
+                "$or": [
+                    {"kind": {"$ne": "reference_document"}},
+                    {"reference_head": {"$exists": True}},
+                ],
             }
         )
         if resource is None:

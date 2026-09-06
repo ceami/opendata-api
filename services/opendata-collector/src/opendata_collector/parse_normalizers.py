@@ -695,9 +695,9 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         source.get("list_title"),
         schema.get("name"),
         _metadata_value(metadata, "목록명", "데이터명"),
+        catalog.get("title"),
         monthly.get("title"),
-        monthly.get("list_title"),
-        catalog.get("title")
+        monthly.get("list_title")
     )
     description = _first(
         source.get("desc"),
