@@ -49,6 +49,8 @@ def validate_url(url):
             "/tcs/dss/selectApiDetailFunction.do",
             "/tcs/dss/selectDpkDetailInfo.do",
             "/tcs/dss/selectHistAndCsvData.do",
+            "/tcs/dss/selectFileDataDownload.do",
+            "/cmm/cmm/fileDownload.do",
         }
     elif host == "api.odcloud.kr":
         allowed = path.startswith("/api/15077093/v1/")
@@ -107,17 +109,18 @@ class PortalHTTP:
         return self.request("GET", url, auth=auth, kind=kind)
 
     def request(self, method, url, *, auth=False, kind="html", data=None):
-        # POST is allowed only for this read-only metadata popup, never portal actions.
-        if method != "GET" and not (
-            method == "POST"
-            and urlsplit(url).path
-            in {
+        for redirect in range(6):
+            path = urlsplit(url).path
+            # POST is allowed only for read-only metadata popups, never portal actions.
+            if method == "GET":
+                if path == "/tcs/dss/selectFileDataDownload.do":
+                    raise FetchError("Unapproved metadata method")
+            elif method != "POST" or path not in {
                 "/tcs/dss/selectDpkDetailInfo.do",
                 "/tcs/dss/selectApiDetailFunction.do",
-            }
-        ):
-            raise FetchError("Unapproved metadata method")
-        for redirect in range(6):
+                "/tcs/dss/selectFileDataDownload.do",
+            }:
+                raise FetchError("Unapproved metadata method")
             validate_url(url)
             if auth and (urlsplit(url).hostname != "api.odcloud.kr" or not self.service_key):
                 raise FetchError(

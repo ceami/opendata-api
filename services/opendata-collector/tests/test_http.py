@@ -104,3 +104,30 @@ def test_infuser_staged_openapi_path_is_narrowly_allowed():
     ):
         with pytest.raises(FetchError):
             validate_url(url)
+
+
+def test_snapshot_descriptor_post_and_final_download_get_are_narrowly_allowed():
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, content=b"ok")
+
+    with PortalHTTP(interval=0, transport=httpx.MockTransport(handle)) as client:
+        client.request(
+            "POST",
+            "https://www.data.go.kr/tcs/dss/selectFileDataDownload.do",
+            data={"publicDataPk": "15062804"},
+        )
+        client.get(
+            "https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=FILE_1&fileDetailSn=1"
+        )
+        with pytest.raises(FetchError):
+            client.request("POST", "https://www.data.go.kr/cmm/cmm/fileDownload.do")
+        with pytest.raises(FetchError):
+            client.get("https://www.data.go.kr/cmm/cmm/otherDownload.do")
+
+    assert [request.url.path for request in requests] == [
+        "/tcs/dss/selectFileDataDownload.do",
+        "/cmm/cmm/fileDownload.do",
+    ]
