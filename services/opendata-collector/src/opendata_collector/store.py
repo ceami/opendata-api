@@ -249,9 +249,6 @@ class MongoStore:
         )
         return repeated
 
-    def needs_selection(self, run_id):
-        return not self.get_run(run_id).get("selection_complete") or self.db.portal_reference_run_items.count_documents({"run_id": run_id, "item_type": "catalog", "status": "failed"}) > 0
-
     def pending(self, run_id):
         return self.db.portal_run_items.find({"run_id": run_id, "status": {"$ne": "completed"}})
 
@@ -874,7 +871,11 @@ class ReferenceStore:
         )
 
     def needs_selection(self, run_id):
-        return not self.get_run(run_id).get("selection_complete") or self.db.portal_reference_run_items.count_documents({"run_id": run_id, "item_type": "catalog", "status": "failed"}) > 0
+        if not self.get_run(run_id).get("selection_complete"):
+            return True
+        return self.db.portal_reference_run_items.count_documents(
+            {"run_id": run_id, "item_type": "catalog", "status": "failed"}
+        ) > 0
 
     def pending(self, run_id):
         return self.db.portal_reference_run_items.find(
