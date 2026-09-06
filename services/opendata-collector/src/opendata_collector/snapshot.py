@@ -27,7 +27,7 @@ TYPE_ALIASES = {
     "표준 데이터": "STD",
     "표준데이터셋": "STD",
 }
-DETAIL_PATH = re.compile(r"/data/(\d+)/(fileData|openapi|standard)\.do$")
+DETAIL_PATH = re.compile(r"/data/([0-9]+)/(fileData|openapi|standard)\.do$")
 ATTACHMENT_CALL = re.compile(r"\bfileDetailObj\.fn_fileDataDown\s*\((.*?)\)", re.S)
 
 
@@ -50,9 +50,9 @@ def _normalize_type(value):
 
 
 def _list_id(value):
-    if not isinstance(value, str) or not value.strip().isdigit() or int(value.strip()) < 1:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value.strip()) or int(value) < 1:
         raise ValueError("Snapshot row has invalid catalog ID")
-    return int(value.strip())
+    return int(value)
 
 
 def _detail_identity(url, list_id, data_type):
@@ -77,7 +77,7 @@ def _detail_identity(url, list_id, data_type):
 
 
 def parse_snapshot_csv(payload):
-    """Yield normalized catalog rows after validating the entire CSV structure."""
+    """Return normalized catalog rows after validating the entire CSV structure."""
     reader = csv.DictReader(io.StringIO(_decode_csv(payload), newline=""))
     fieldnames = reader.fieldnames
     if (
@@ -88,6 +88,7 @@ def parse_snapshot_csv(payload):
     ):
         raise ValueError("Snapshot CSV is missing required headers")
     seen = set()
+    items = []
     for row in reader:
         if None in row or any(value is None for value in row.values()):
             raise ValueError("Snapshot CSV row has an unexpected number of columns")
@@ -101,15 +102,18 @@ def parse_snapshot_csv(payload):
         if catalog_id in seen:
             raise ValueError("Snapshot CSV has duplicate catalog identity")
         seen.add(catalog_id)
-        yield {
-            "catalog_id": catalog_id,
-            "data_type": data_type,
-            "list_id": list_id,
-            "detail_url": detail_url,
-            "title": title,
-            "source_id": f"snapshot:{catalog_id}",
-            "source_record": dict(row),
-        }
+        items.append(
+            {
+                "catalog_id": catalog_id,
+                "data_type": data_type,
+                "list_id": list_id,
+                "detail_url": detail_url,
+                "title": title,
+                "source_id": f"snapshot:{catalog_id}",
+                "source_record": dict(row),
+            }
+        )
+    return items
 
 
 def _snapshot_attachment(html):
@@ -129,6 +133,14 @@ def _snapshot_attachment(html):
     if len(attachments) != 1:
         raise ValueError("Snapshot page has missing or ambiguous download attachment")
     return attachments[0]
+
+
+def _positive_ascii_decimal(value):
+    if isinstance(value, str) and re.fullmatch(r"[0-9]+", value) and int(value) > 0:
+        return value
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return str(value)
+    return None
 
 
 def discover_snapshot_download(http):
@@ -151,21 +163,27 @@ def discover_snapshot_download(http):
         payload = json.loads(descriptor.text)
     except (TypeError, ValueError):
         raise ValueError("Snapshot download descriptor is not JSON") from None
-    info = payload.get("dataSetFileDetailInfo") if isinstance(payload, dict) else None
-    atch_file_id = payload.get("atchFileId") if isinstance(payload, dict) else None
-    file_detail_sn = payload.get("fileDetailSn") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("status") is not True:
+        raise ValueError("Snapshot download descriptor is invalid")
+    info = payload.get("dataSetFileDetailInfo")
+    atch_file_id = payload.get("atchFileId")
+    file_detail_sn = _positive_ascii_decimal(payload.get("fileDetailSn"))
     name = info.get("dataNm") if isinstance(info, dict) else None
+    public_data_pk = (
+        _positive_ascii_decimal(info.get("publicDataPk")) if isinstance(info, dict) else None
+    )
+    returned_detail_pk = info.get("publicDataDetailPk") if isinstance(info, dict) else None
     if (
-        not isinstance(payload, dict)
-        or payload.get("status") is not True
+        public_data_pk != SNAPSHOT_DATA_ID
+        or returned_detail_pk != public_data_detail_pk
         or not isinstance(atch_file_id, str)
-        or not atch_file_id
-        or not isinstance(file_detail_sn, (str, int))
-        or not str(file_detail_sn)
+        or not atch_file_id.strip()
+        or file_detail_sn is None
         or not isinstance(name, str)
         or not name.strip()
     ):
         raise ValueError("Snapshot download descriptor is invalid")
+    atch_file_id = atch_file_id.strip()
     return {
         "name": name.strip(),
         "url": BASE_URL

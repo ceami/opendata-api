@@ -95,7 +95,11 @@ def test_discover_snapshot_download_uses_only_official_descriptor_then_download_
                     "status": True,
                     "atchFileId": "FILE_000000003695488",
                     "fileDetailSn": "1",
-                    "dataSetFileDetailInfo": {"dataNm": "목록개방현황 20260731"},
+                    "dataSetFileDetailInfo": {
+                        "publicDataPk": "15062804",
+                        "publicDataDetailPk": "uddi:monthly",
+                        "dataNm": "목록개방현황 20260731",
+                    },
                 },
             )
         raise AssertionError(f"unexpected request: {request.url}")
@@ -122,6 +126,89 @@ def test_discover_snapshot_download_uses_only_official_descriptor_then_download_
     ],
 )
 def test_discover_snapshot_download_rejects_invalid_descriptor_payload(payload):
+    def handle(request):
+        if request.url.path == "/data/15062804/fileData.do":
+            return httpx.Response(
+                200,
+                text="<button onclick=\"fileDetailObj.fn_fileDataDown('15062804', 'uddi:monthly', '', '1', '2')\">다운로드</button>",
+            )
+        return httpx.Response(200, json=payload)
+
+    with PortalHTTP(interval=0, transport=httpx.MockTransport(handle)) as client:
+        with pytest.raises(ValueError):
+            discover_snapshot_download(client)
+
+
+def test_parse_snapshot_csv_rejects_unicode_catalog_identifiers():
+    payload = (HEADERS + FILE_ROW.replace("3049380", "３０４９３８０")).encode()
+
+    with pytest.raises(ValueError):
+        list(parse_snapshot_csv(payload))
+
+
+def test_parse_snapshot_csv_validates_trailing_rows_before_returning_records():
+    payload = (HEADERS + FILE_ROW + FILE_ROW.replace("파일", "알수없음")).encode()
+
+    with pytest.raises(ValueError):
+        parse_snapshot_csv(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "status": True,
+            "atchFileId": "FILE_000000003695488",
+            "fileDetailSn": "1",
+            "dataSetFileDetailInfo": {
+                "publicDataPk": "15062805",
+                "publicDataDetailPk": "uddi:monthly",
+                "dataNm": "목록개방현황 20260731",
+            },
+        },
+        {
+            "status": True,
+            "atchFileId": "FILE_000000003695488",
+            "fileDetailSn": "1",
+            "dataSetFileDetailInfo": {
+                "publicDataPk": "15062804",
+                "publicDataDetailPk": "uddi:other",
+                "dataNm": "목록개방현황 20260731",
+            },
+        },
+        {
+            "status": True,
+            "atchFileId": "   ",
+            "fileDetailSn": "1",
+            "dataSetFileDetailInfo": {
+                "publicDataPk": "15062804",
+                "publicDataDetailPk": "uddi:monthly",
+                "dataNm": "목록개방현황 20260731",
+            },
+        },
+        {
+            "status": True,
+            "atchFileId": "FILE_000000003695488",
+            "fileDetailSn": " 1 ",
+            "dataSetFileDetailInfo": {
+                "publicDataPk": "15062804",
+                "publicDataDetailPk": "uddi:monthly",
+                "dataNm": "목록개방현황 20260731",
+            },
+        },
+        {
+            "status": True,
+            "atchFileId": "FILE_000000003695488",
+            "fileDetailSn": True,
+            "dataSetFileDetailInfo": {
+                "publicDataPk": "15062804",
+                "publicDataDetailPk": "uddi:monthly",
+                "dataNm": "목록개방현황 20260731",
+            },
+        },
+    ],
+)
+def test_discover_snapshot_download_rejects_mismatched_or_malformed_descriptor_fields(payload):
     def handle(request):
         if request.url.path == "/data/15062804/fileData.do":
             return httpx.Response(
