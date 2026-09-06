@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 from contextlib import nullcontext
+from pathlib import Path
 
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
@@ -16,8 +17,9 @@ from .http import FetchError, PortalHTTP
 from .parse_pipeline import ParsePipeline
 from .parse_store import ParseStore
 from .pipeline import Pipeline
+from .snapshot import SNAPSHOT_MAX_BYTES, SnapshotPipeline, discover_snapshot_download
 from .sources import TYPES, CatalogSource
-from .store import MongoStore
+from .store import MongoStore, SnapshotStore
 
 
 def positive(value):
@@ -58,6 +60,14 @@ def parser():
     parse_command.add_argument("--types", choices=TYPES, nargs="+", default=list(TYPES))
     parse_command.add_argument("--limit", type=positive)
     parse_command.add_argument("--force", action="store_true")
+    snapshot_command = commands.add_parser(
+        "snapshot", help="Persist the official monthly catalog CSV without live-catalog writes"
+    )
+    snapshot_command.add_argument("--file", help="Validated local CSV path for replay or recovery")
+    snapshot_command.add_argument("--interval", type=float, default=0.5)
+    snapshot_command.add_argument("--retries", type=int, default=3)
+    snapshot_command.add_argument("--timeout", type=positive, default=30)
+    snapshot_command.add_argument("--max-bytes", type=positive, default=SNAPSHOT_MAX_BYTES)
     status = commands.add_parser("status")
     status.add_argument("run_id")
     return root
@@ -142,6 +152,26 @@ def main(argv=None):
                 )
             print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
             return 0 if report["status"] == "completed" else 2
+        if args.command == "snapshot":
+            if args.file:
+                file_path = Path(args.file)
+                content = file_path.read_bytes()
+                source = {"kind": "file", "name": file_path.name}
+            else:
+                with PortalHTTP(
+                    interval=args.interval,
+                    retries=args.retries,
+                    timeout=args.timeout,
+                    max_bytes=args.max_bytes,
+                ) as http:
+                    descriptor = discover_snapshot_download(http)
+                    content = http.get(descriptor["url"], kind="snapshot_csv").content
+                source = {"kind": "official", **descriptor}
+            client, mongo_store = _mongo()
+            with client:
+                report = SnapshotPipeline(SnapshotStore(mongo_store.db)).run(content, source=source)
+            print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
+            return 0 if report["status"] == "completed" else 2
         with PortalHTTP(
             service_key=os.environ.get("ODP_SERVICE_KEY"),
             interval=args.interval,
@@ -164,7 +194,7 @@ def main(argv=None):
             print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
             return 0 if report["status"] == "completed" else 2
     except (ValueError, FetchError, RuntimeError) as error:
-        operation = "Parsing" if args.command == "parse" else "Collection"
+        operation = {"parse": "Parsing", "snapshot": "Snapshot"}.get(args.command, "Collection")
         print(f"{operation} failed: {error}", file=sys.stderr)
         return 1
     except PyMongoError:

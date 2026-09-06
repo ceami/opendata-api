@@ -1,8 +1,17 @@
 import httpx
+import mongomock
 import pytest
+from mongomock.gridfs import enable_gridfs_integration
 
+import opendata_collector.snapshot as snapshot_module
+import opendata_collector.store as store_module
 from opendata_collector.http import PortalHTTP
-from opendata_collector.snapshot import discover_snapshot_download, parse_snapshot_csv
+from opendata_collector.snapshot import (
+    discover_snapshot_download,
+    parse_snapshot_csv,
+)
+
+enable_gridfs_integration()
 
 HEADERS = "목록키,목록유형,목록명,목록 URL,제공기관\n"
 FILE_ROW = (
@@ -10,6 +19,24 @@ FILE_ROW = (
 )
 SUFFIXES = {"FILE": "fileData", "API": "openapi", "STD": "standard"}
 TYPE_NAMES = {"FILE": "파일", "API": "오픈API", "STD": "표준데이터셋"}
+
+
+@pytest.fixture
+def snapshot_pipeline():
+    database = mongomock.MongoClient(tz_aware=True).snapshot
+    return snapshot_module.SnapshotPipeline(store_module.SnapshotStore(database, batch_size=1))
+
+
+def snapshot_row(list_id, data_type="FILE", title=None):
+    suffix = SUFFIXES[data_type]
+    return (
+        f"{list_id},{TYPE_NAMES[data_type]},{title or f'Catalog {list_id}'},"
+        f"https://www.data.go.kr/data/{list_id}/{suffix}.do,기관\n"
+    )
+
+
+def snapshot_payload(*rows):
+    return (HEADERS + "".join(rows)).encode()
 
 
 @pytest.mark.parametrize(
@@ -220,3 +247,63 @@ def test_discover_snapshot_download_rejects_mismatched_or_malformed_descriptor_f
     with PortalHTTP(interval=0, transport=httpx.MockTransport(handle)) as client:
         with pytest.raises(ValueError):
             discover_snapshot_download(client)
+
+
+def test_snapshot_persists_one_raw_csv_for_repeated_payloads(snapshot_pipeline):
+    payload = snapshot_payload(snapshot_row(1))
+
+    first = snapshot_pipeline.run(payload, source={"kind": "file", "name": "monthly.csv"})
+    second = snapshot_pipeline.run(payload, source={"kind": "file", "name": "monthly.csv"})
+
+    records = list(snapshot_pipeline.store.db.portal_snapshot_records.find())
+    assert snapshot_pipeline.store.db.portal_raw.files.count_documents({}) == 1
+    assert len(records) == 1
+    assert records[0]["last_seen_run"] == second["run_id"]
+    assert first["raw_id"] == second["raw_id"]
+
+
+def test_snapshot_rejects_invalid_payload_before_retiring_current_rows(snapshot_pipeline):
+    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
+
+    with pytest.raises(ValueError, match="unsupported catalog type"):
+        snapshot_pipeline.run(
+            snapshot_payload(snapshot_row(1, title="Changed").replace("파일", "알수없음")),
+            source={"kind": "file"},
+        )
+
+    records = list(snapshot_pipeline.store.db.portal_snapshot_records.find({"is_active": True}))
+    assert {record["_id"] for record in records} == {"FILE:1", "FILE:2"}
+
+
+def test_snapshot_retires_unseen_rows_only_after_a_complete_valid_snapshot(snapshot_pipeline):
+    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
+
+    report = snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
+
+    current = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:1"})
+    retired = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:2"})
+    assert report["status"] == "completed"
+    assert current["is_active"] is True
+    assert retired["is_active"] is False
+    assert retired["removed_at"] is not None
+
+
+def test_snapshot_report_reconciles_snapshot_and_authoritative_current_records(snapshot_pipeline):
+    catalog = snapshot_pipeline.store.db.portal_catalog
+    catalog.insert_many(
+        [
+            {"_id": "API:1", "is_active": True},
+            {"_id": "STD:3", "is_active": True},
+            {"_id": "FILE:4", "is_active": False},
+        ]
+    )
+
+    report = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1, "API"), snapshot_row(2)), source={"kind": "file"}
+    )
+
+    assert report["reconciliation"] == {
+        "matched": 1,
+        "snapshot_only": 1,
+        "current_only": 1,
+    }

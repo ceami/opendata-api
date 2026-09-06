@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import gridfs
-from pymongo import ReturnDocument
+from pymongo import ReturnDocument, UpdateOne
 from pymongo.errors import DuplicateKeyError
 
 
@@ -405,3 +405,160 @@ class MongoStore:
                 },
             )
         return report
+
+
+class SnapshotStore:
+    """Persist validated monthly CSV rows without changing live catalog authority."""
+
+    def __init__(self, database, *, batch_size=1000):
+        if batch_size < 1:
+            raise ValueError("Snapshot batch size must be positive")
+        self.db = database
+        self.raw = gridfs.GridFS(database, collection="portal_raw")
+        self.batch_size = batch_size
+
+    def initialize(self):
+        self.db.portal_snapshot_records.create_index(
+            [("data_type", 1), ("list_id", 1)], unique=True
+        )
+        self.db.portal_snapshot_records.create_index([("is_active", 1), ("last_seen_run", 1)])
+        self.db.portal_snapshot_runs.create_index("started_at")
+        self.db.portal_snapshot_runs.create_index("raw_sha256")
+
+    def save_raw(self, content):
+        raw_id = hashlib.sha256(content).hexdigest()
+        if not self.raw.exists(raw_id):
+            try:
+                self.raw.put(
+                    gzip.compress(content, mtime=0),
+                    _id=raw_id,
+                    compression="gzip",
+                    original_bytes=len(content),
+                )
+            except gridfs.errors.FileExists:
+                pass
+        return raw_id
+
+    @staticmethod
+    def _hash_json(value):
+        return hashlib.sha256(
+            json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    @staticmethod
+    def _batches(values, size):
+        for start in range(0, len(values), size):
+            yield values[start : start + size]
+
+    def start_run(self, *, source, raw_id, raw_sha256, record_count):
+        run = {
+            "_id": str(uuid.uuid4()),
+            "source": source,
+            "source_hash": self._hash_json(source),
+            "raw_id": raw_id,
+            "raw_sha256": raw_sha256,
+            "record_count": record_count,
+            "started_at": now(),
+            "updated_at": now(),
+            "status": "running",
+        }
+        self.db.portal_snapshot_runs.insert_one(run)
+        return run
+
+    def persist(self, rows, *, source, raw_content):
+        """Publish validated rows in batches, then retire rows absent from this snapshot."""
+        self.initialize()
+        raw_sha256 = hashlib.sha256(raw_content).hexdigest()
+        raw_id = self.save_raw(raw_content)
+        run = self.start_run(
+            source=source,
+            raw_id=raw_id,
+            raw_sha256=raw_sha256,
+            record_count=len(rows),
+        )
+        seen_at = now()
+        for batch in self._batches(rows, self.batch_size):
+            operations, updates = [], []
+            for row in batch:
+                fields = {
+                    "catalog_id": row["catalog_id"],
+                    "data_type": row["data_type"],
+                    "list_id": row["list_id"],
+                    "title": row["title"],
+                    "detail_url": row["detail_url"],
+                    "source_id": row["source_id"],
+                    "source_record": row["source_record"],
+                    "source_hash": self._hash_json(row["source_record"]),
+                    "detail_hash": hashlib.sha256(row["detail_url"].encode()).hexdigest(),
+                    "raw_id": raw_id,
+                    "raw_sha256": raw_sha256,
+                    "last_seen_run": run["_id"],
+                    "last_seen_at": seen_at,
+                    "is_active": True,
+                }
+                selector = {"_id": row["catalog_id"]}
+                update = {
+                    "$set": fields,
+                    "$unset": {"removed_at": ""},
+                    "$setOnInsert": {"first_seen_at": seen_at},
+                }
+                updates.append((selector, update))
+                operations.append(UpdateOne(selector, update, upsert=True))
+            if operations:
+                try:
+                    self.db.portal_snapshot_records.bulk_write(operations, ordered=False)
+                except TypeError as error:
+                    # mongomock 4.3 is incompatible with PyMongo's current UpdateOne API.
+                    if "unexpected keyword argument 'sort'" not in str(error):
+                        raise
+                    for selector, update in updates:
+                        self.db.portal_snapshot_records.update_one(selector, update, upsert=True)
+
+        # A write failure above leaves this run incomplete and cannot retire previous rows.
+        retired = self.db.portal_snapshot_records.update_many(
+            {
+                "last_seen_run": {"$ne": run["_id"]},
+                "is_active": {"$ne": False},
+            },
+            {"$set": {"is_active": False, "removed_at": now()}},
+        ).modified_count
+        reconciliation = self.reconciliation()
+        report = {
+            "run_id": run["_id"],
+            "status": "completed",
+            "source": source,
+            "raw_id": raw_id,
+            "raw_sha256": raw_sha256,
+            "record_count": len(rows),
+            "retired_count": retired,
+            "reconciliation": reconciliation,
+        }
+        self.db.portal_snapshot_runs.update_one(
+            {"_id": run["_id"]},
+            {"$set": {"status": "completed", "summary": report, "updated_at": now()}},
+        )
+        return report
+
+    def reconciliation(self):
+        active_snapshot = {"is_active": {"$ne": False}}
+        active_current = {"is_active": {"$ne": False}}
+        snapshot_count = self.db.portal_snapshot_records.count_documents(active_snapshot)
+        current_count = self.db.portal_catalog.count_documents(active_current)
+        matched = 0
+        identifiers = []
+        for record in self.db.portal_snapshot_records.find(active_snapshot, {"_id": 1}):
+            identifiers.append(record["_id"])
+            if len(identifiers) == self.batch_size:
+                matched += self.db.portal_catalog.count_documents(
+                    {"_id": {"$in": identifiers}, **active_current}
+                )
+                identifiers = []
+        if identifiers:
+            matched += self.db.portal_catalog.count_documents(
+                {"_id": {"$in": identifiers}, **active_current}
+            )
+        return {
+            "matched": matched,
+            "snapshot_only": snapshot_count - matched,
+            "current_only": current_count - matched,
+        }

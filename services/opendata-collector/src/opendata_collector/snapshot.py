@@ -28,6 +28,7 @@ TYPE_ALIASES = {
     "표준데이터셋": "STD",
 }
 DETAIL_PATH = re.compile(r"/data/([0-9]+)/(fileData|openapi|standard)\.do$")
+SNAPSHOT_MAX_BYTES = 256 * 1024 * 1024
 ATTACHMENT_CALL = re.compile(r"\bfileDetailObj\.fn_fileDataDown\s*\((.*?)\)", re.S)
 
 
@@ -196,3 +197,14 @@ def discover_snapshot_download(http):
             }
         ),
     }
+
+
+class SnapshotPipeline:
+    """Validate a complete monthly CSV before publishing its current rows."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def run(self, payload, *, source):
+        rows = parse_snapshot_csv(payload)
+        return self.store.persist(rows, source=source, raw_content=bytes(payload))

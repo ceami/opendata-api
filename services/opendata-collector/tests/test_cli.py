@@ -125,3 +125,102 @@ def test_parse_reports_parser_errors_without_http(monkeypatch, capsys):
 
     assert main(["parse"]) == 1
     assert "Parsing failed: invalid parsed source" in capsys.readouterr().err
+
+
+def test_snapshot_file_dispatches_without_http_or_service_key(monkeypatch, tmp_path, capsys):
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    payload = b"monthly csv"
+    source_file = tmp_path / "snapshot.csv"
+    source_file.write_bytes(payload)
+    mongo_store = type("MongoStoreStub", (), {"db": object()})()
+    snapshot_store = object()
+    observed = {}
+
+    class PipelineStub:
+        def __init__(self, value):
+            assert value is snapshot_store
+
+        def run(self, content, *, source):
+            observed.update(content=content, source=source)
+            return {"status": "completed", "run_id": "snapshot-run"}
+
+    monkeypatch.delenv("ODP_SERVICE_KEY", raising=False)
+    monkeypatch.setattr("opendata_collector.cli._mongo", lambda: (Client(), mongo_store))
+    monkeypatch.setattr("opendata_collector.cli.SnapshotStore", lambda db: snapshot_store, raising=False)
+    monkeypatch.setattr("opendata_collector.cli.SnapshotPipeline", PipelineStub, raising=False)
+    monkeypatch.setattr(
+        "opendata_collector.cli.PortalHTTP",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("HTTP must not be constructed")),
+    )
+
+    assert main(["snapshot", "--file", str(source_file)]) == 0
+    assert observed == {"content": payload, "source": {"kind": "file", "name": "snapshot.csv"}}
+    assert json.loads(capsys.readouterr().out)["run_id"] == "snapshot-run"
+
+
+def test_snapshot_downloads_official_csv_with_configurable_byte_limit(monkeypatch, capsys):
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    mongo_store = type("MongoStoreStub", (), {"db": object()})()
+    snapshot_store = object()
+    observed = {}
+
+    class HTTP:
+        def __init__(self, **kwargs):
+            observed["http"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def get(self, url, *, kind):
+            assert (url, kind) == ("https://www.data.go.kr/cmm/cmm/fileDownload.do?file=1", "snapshot_csv")
+            return type("Resource", (), {"content": b"official csv"})()
+
+    class PipelineStub:
+        def __init__(self, value):
+            assert value is snapshot_store
+
+        def run(self, content, *, source):
+            observed.update(content=content, source=source)
+            return {"status": "completed", "run_id": "official-run"}
+
+    monkeypatch.delenv("ODP_SERVICE_KEY", raising=False)
+    monkeypatch.setattr("opendata_collector.cli._mongo", lambda: (Client(), mongo_store))
+    monkeypatch.setattr("opendata_collector.cli.SnapshotStore", lambda db: snapshot_store, raising=False)
+    monkeypatch.setattr("opendata_collector.cli.SnapshotPipeline", PipelineStub, raising=False)
+    monkeypatch.setattr("opendata_collector.cli.PortalHTTP", HTTP)
+    monkeypatch.setattr(
+        "opendata_collector.cli.discover_snapshot_download",
+        lambda http: {"name": "official.csv", "url": "https://www.data.go.kr/cmm/cmm/fileDownload.do?file=1"},
+        raising=False,
+    )
+
+    assert main(["snapshot", "--max-bytes", "1234"]) == 0
+    assert observed["http"]["max_bytes"] == 1234
+    assert observed["content"] == b"official csv"
+    assert observed["source"] == {
+        "kind": "official",
+        "name": "official.csv",
+        "url": "https://www.data.go.kr/cmm/cmm/fileDownload.do?file=1",
+    }
+    assert json.loads(capsys.readouterr().out)["run_id"] == "official-run"
+
+
+def test_snapshot_defaults_to_the_official_csv_size_limit():
+    from opendata_collector.cli import parser
+
+    assert parser().parse_args(["snapshot"]).max_bytes == 268435456
