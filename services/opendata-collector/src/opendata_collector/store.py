@@ -873,9 +873,12 @@ class ReferenceStore:
     def needs_selection(self, run_id):
         if not self.get_run(run_id).get("selection_complete"):
             return True
-        return self.db.portal_reference_run_items.count_documents(
-            {"run_id": run_id, "item_type": "catalog", "status": "failed"}
-        ) > 0
+        return (
+            self.db.portal_reference_run_items.count_documents(
+                {"run_id": run_id, "item_type": "catalog", "status": "failed"}
+            )
+            > 0
+        )
 
     def pending(self, run_id):
         return self.db.portal_reference_run_items.find(
@@ -884,14 +887,14 @@ class ReferenceStore:
 
     def current_descriptor(self, descriptor):
         catalog = self.db.portal_catalog.find_one(
-            {
-                "_id": descriptor["catalog_id"],
-                "is_active": {"$ne": False},
-                "detail_status": {"$in": ["completed", "partial"]},
-            }
+            {"_id": descriptor["catalog_id"], "is_active": {"$ne": False}}
         )
-        if not catalog or not catalog.get("parsed_detail_ref"):
+        if not catalog:
             return None, None
+        if catalog.get("detail_status") not in {"completed", "partial"} or not catalog.get(
+            "parsed_detail_ref"
+        ):
+            return None, "Cannot load collected detail payload"
         try:
             detail = self.load_detail(catalog["parsed_detail_ref"])
         except (

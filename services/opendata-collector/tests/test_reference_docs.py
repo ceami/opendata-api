@@ -786,3 +786,37 @@ def test_unreadable_current_detail_stays_retryable_and_same_bytes_failed_force_k
     assert retry["status"] == "incomplete"
     assert retry["failed"] == 1
     assert retry["stale"] == 0
+
+
+def test_resume_active_catalog_without_usable_detail_stays_retryable_but_removed_catalog_is_stale(
+    monkeypatch,
+):
+    store = reference_store_with_catalogs(file=False)
+    http = ReferenceHTTP()
+    http.fail.add(
+        "https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=FILE_000000000001&fileDetailSn=2&dataNm=API+guide.docx"
+    )
+    first = ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=10)
+    for fields in ({"detail_status": "failed"}, {"$unset": "parsed_detail_ref"}):
+        if "$unset" in fields:
+            store.db.portal_catalog.update_one(
+                {"_id": "API:15129394"}, {"$unset": {"parsed_detail_ref": ""}}
+            )
+        else:
+            store.db.portal_catalog.update_one({"_id": "API:15129394"}, {"$set": fields})
+        result = ReferencePipeline(store, http).run(resume=first["run_id"])
+        assert result["failed"] == 1 and result["stale"] == 0
+        store.db.portal_catalog.update_one(
+            {"_id": "API:15129394"},
+            {
+                "$set": {
+                    "detail_status": "completed",
+                    "parsed_detail_ref": MongoStore(store.db).save_raw(
+                        json.dumps(detail(attachment("API guide.docx"))).encode()
+                    ),
+                }
+            },
+        )
+    store.db.portal_catalog.update_one({"_id": "API:15129394"}, {"$set": {"is_active": False}})
+    result = ReferencePipeline(store, http).run(resume=first["run_id"])
+    assert result["stale"] == 1 and result["failed"] == 0
