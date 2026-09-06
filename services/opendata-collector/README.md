@@ -98,12 +98,14 @@ uv run --env-file ../../.env.dev opendata-collect parse \
 uv run --env-file ../../.env.dev opendata-collect parse --force
 ```
 
-파싱 결과는 `list_id`로 upsert합니다. 원천 필드·상세 JSON·활성 리소스 ID와 parser version으로 fingerprint를 계산하여 변경이 없는 문서는 건너뜁니다. 원천이 바뀌거나 parser version이 올라가면 다시 파싱합니다. 기존 중복 `parsed_api_info`/`parsed_file_info` 문서는 해당 ID를 처리할 때 최신 `parsed_at`의 `_id` 하나를 유지합니다.
+파싱 결과는 `list_id`로 upsert합니다. 원천 필드·상세 JSON·활성 리소스 ID와 parser version으로 fingerprint를 계산하여 변경이 없는 문서는 건너뜁니다. 원천이 바뀌거나 parser version이 올라가면 다시 파싱합니다. 기존 중복 `parsed_api_info`/`parsed_file_info` 문서는 해당 ID를 처리할 때 최신 `parsed_at`의 `_id` 하나를 유지합니다. 현재 parser version은 `2`이며 기존 version `1` 문서는 다음 `parse` 실행에서 자동으로 다시 파싱됩니다.
+
+모든 parsed 문서는 상세 URL, 제공기관·부서·연락처, 등록·공개·수정일, 라이선스·보유근거, 갱신주기, 매체·행 수, 공간·시간 범위와 원본 metadata/schema.org/첨부자료를 보존합니다. 날짜는 UTC로 정규화하되 유효한 원천 날짜가 없으면 `null`로 둡니다.
 
 | 원천 유형 | 파싱 결과 |
 | --- | --- |
-| API | `parsed_api_info`: OpenAPI 2/3 endpoint·요청·응답·예시. 명세가 없으면 operation 표, 마지막으로 공식 원천 record를 사용 |
-| FILE | `parsed_file_info`: 배포 링크, 컬럼, 과거 버전과 상세, 포함된 OpenAPI endpoint |
+| API | `parsed_api_info`: OpenAPI 2/3 endpoint·요청·응답·예시·서버·보안·제약조건. OpenAPI와 operation 표를 endpoint별로 병합하고 명세·서비스 URL·첨부자료도 보존 |
+| FILE | `parsed_file_info`: 배포 링크, 컬럼, 과거 버전과 상세, 포함된 OpenAPI endpoint와 명세 문맥 |
 | STD | `parsed_std_info`: 표준 요약·컬럼·멤버 수. 기관별 자료는 `parsed_std_members`에 분리 |
 | LINKED | `parsed_linked_info`: schema.org와 DCAT의 기관·라이선스·접근 URL |
 

@@ -1,7 +1,11 @@
 from datetime import datetime, timezone
 
 import pytest
-from opendata_collector.parse_normalizers import ParseInput, normalize_catalog
+from opendata_collector.parse_normalizers import (
+    PARSER_VERSION,
+    ParseInput,
+    normalize_catalog,
+)
 from opendata_collector.projection import project_legacy
 
 from api.v1.application.catalog.catalog_service import CatalogService
@@ -16,6 +20,7 @@ from models import (
     OpenAPIInfo,
     OpenFileInfo,
     ParsedAPIInfo,
+    ParsedEndpoint,
     ParsedFileInfo,
     ParsedLinkedInfo,
     ParsedSTDInfo,
@@ -157,8 +162,15 @@ async def test_old_api_kind_field_does_not_break_the_api_collection(database):
 )
 def test_parser_outputs_validate_against_api_models(kind, model):
     detail = {
-        "metadata": {"설명": ["description"]},
-        "schema_org": [],
+        "metadata": {
+            "설명": ["description"],
+            "이용허락범위": ["출처표시"],
+            "등록일": ["2025-01-02"],
+        },
+        "schema_org": [
+            {"@type": "Dataset", "name": "public"},
+            {"@type": "WebPage", "name": "detail page"},
+        ],
         "api_specs": [],
         "attachments": [],
         "tables": [],
@@ -178,6 +190,7 @@ def test_parser_outputs_validate_against_api_models(kind, model):
                 "list_id": 7,
                 "title": "public",
                 "summary": {},
+                "detail_url": "https://www.data.go.kr/data/7/detail.do",
                 "detail_status": "completed",
                 "detail_errors": [],
             },
@@ -189,8 +202,41 @@ def test_parser_outputs_validate_against_api_models(kind, model):
     document = model.model_validate(value.document)
 
     assert document.source_catalog_id == f"{kind}:7"
-    assert document.parser_version == "1"
+    assert document.parser_version == PARSER_VERSION
     assert document.parse_status == "completed"
+    assert document.source_url == "https://www.data.go.kr/data/7/detail.do"
+    assert document.license == "출처표시"
+    assert document.created_at == datetime(2025, 1, 2, tzinfo=timezone.utc)
+    assert len(document.schema_org_raw) == 2
+    assert document.schema_org_raw[1]["@type"] == "WebPage"
+
+
+def test_enriched_endpoint_fields_survive_api_model_validation():
+    endpoint = ParsedEndpoint.model_validate(
+        {
+            "id": "7_/items_GET",
+            "path": "/items",
+            "method": "GET",
+            "name": "목록 조회",
+            "description": "항목을 조회합니다.",
+            "operation_id": "listItems",
+            "tags": ["items"],
+            "servers": [{"url": "https://api.example.test/v1"}],
+            "security": [{"ApiKey": []}],
+            "deprecated": False,
+            "absolute_url": "https://api.example.test/v1/items",
+            "request_schema": {},
+            "response_schemas": {},
+        }
+    )
+
+    assert endpoint.description == "항목을 조회합니다."
+    assert endpoint.operation_id == "listItems"
+    assert endpoint.tags == ["items"]
+    assert endpoint.servers == [{"url": "https://api.example.test/v1"}]
+    assert endpoint.security == [{"ApiKey": []}]
+    assert endpoint.deprecated is False
+    assert endpoint.absolute_url == "https://api.example.test/v1/items"
 
 
 def test_standard_member_output_validates_against_api_model():

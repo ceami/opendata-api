@@ -34,6 +34,7 @@ def parse_input(kind, detail, *, sources=(), resources=(), detail_status="comple
 def test_parses_swagger2_parameters_responses_and_local_refs():
     spec = {
         "swagger": "2.0",
+        "security": [{"ApiKey": []}],
         "securityDefinitions": {"ApiKey": {"type": "apiKey", "in": "header", "name": "X-API-Key"}},
         "paths": {
             "/items": {
@@ -80,6 +81,7 @@ def test_parses_swagger2_parameters_responses_and_local_refs():
                         "type": "string",
                         "required": True,
                         "in_": "header",
+                        "security_scheme": "ApiKey",
                     }
                 },
                 "query_params": {
@@ -117,6 +119,7 @@ def test_parses_swagger2_parameters_responses_and_local_refs():
             },
             "example_response_data": {"name": "sample"},
             "example_request_string": None,
+            "security": [{"ApiKey": []}],
         }
     ]
 
@@ -183,6 +186,268 @@ def test_parses_openapi3_request_body_path_parameter_and_recursive_ref():
     }
     assert endpoint["response_schemas"]["201"]["data_schema"]["type"] == "object"
     assert endpoint["example_response_data"] == {"name": "root"}
+
+
+def test_openapi_preserves_servers_operation_security_and_parameter_constraints():
+    spec = {
+        "openapi": "3.0.3",
+        "servers": [{"url": "https://api.example.test/v1", "description": "production"}],
+        "security": [{"ApiKey": []}],
+        "paths": {
+            "/items": {
+                "get": {
+                    "operationId": "listItems",
+                    "summary": "항목 목록",
+                    "description": "등록된 항목을 조회합니다.",
+                    "tags": ["items"],
+                    "deprecated": True,
+                    "parameters": [
+                        {
+                            "name": "page",
+                            "in": "query",
+                            "description": "페이지 번호",
+                            "schema": {
+                                "type": "integer",
+                                "format": "int32",
+                                "default": 1,
+                                "minimum": 1,
+                                "maximum": 100,
+                            },
+                            "example": 2,
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {
+                                                "type": "string",
+                                                "default": "unknown",
+                                                "example": "sample",
+                                                "minLength": 1,
+                                                "pattern": "^[a-z]+$",
+                                            }
+                                        },
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            }
+        },
+        "components": {
+            "securitySchemes": {
+                "ApiKey": {
+                    "type": "apiKey",
+                    "in": "query",
+                    "name": "serviceKey",
+                    "description": "공공데이터포털 인증키",
+                }
+            }
+        },
+    }
+
+    endpoint = parse_openapi_endpoints(spec, 7)[0]
+
+    assert endpoint["name"] == "항목 목록"
+    assert endpoint["description"] == "등록된 항목을 조회합니다."
+    assert endpoint["operation_id"] == "listItems"
+    assert endpoint["tags"] == ["items"]
+    assert endpoint["deprecated"] is True
+    assert endpoint["servers"] == [
+        {"url": "https://api.example.test/v1", "description": "production"}
+    ]
+    assert endpoint["security"] == [{"ApiKey": []}]
+    assert endpoint["request_schema"]["query_params"]["serviceKey"] == {
+        "name": "serviceKey",
+        "description": "공공데이터포털 인증키",
+        "type": "string",
+        "required": True,
+        "in_": "query",
+        "security_scheme": "ApiKey",
+    }
+    assert endpoint["request_schema"]["query_params"]["page"] == {
+        "name": "page",
+        "description": "페이지 번호",
+        "type": "integer",
+        "required": False,
+        "in_": "query",
+        "format": "int32",
+        "default": 1,
+        "example": 2,
+        "minimum": 1,
+        "maximum": 100,
+    }
+    assert endpoint["response_schemas"]["200"]["content_types"] == ["application/json"]
+    response_property = endpoint["response_schemas"]["200"]["data_schema"]["properties"]["name"]
+    assert response_property["default"] == "unknown"
+    assert response_property["example"] == "sample"
+    assert response_property["minLength"] == 1
+    assert response_property["pattern"] == "^[a-z]+$"
+
+
+def test_openapi_injects_only_effective_security_and_honors_public_override():
+    spec = {
+        "openapi": "3.0.3",
+        "security": [{"UsedKey": []}],
+        "paths": {
+            "/secure": {"get": {"responses": {}}},
+            "/public": {"get": {"security": [], "responses": {}}},
+        },
+        "components": {
+            "securitySchemes": {
+                "UsedKey": {"type": "apiKey", "in": "query", "name": "serviceKey"},
+                "UnusedKey": {"type": "apiKey", "in": "header", "name": "X-Unused"},
+            }
+        },
+    }
+
+    endpoints = {endpoint["path"]: endpoint for endpoint in parse_openapi_endpoints(spec, 7)}
+
+    assert set(endpoints["/secure"]["request_schema"]["query_params"]) == {"serviceKey"}
+    assert endpoints["/secure"]["request_schema"]["headers"] == {}
+    assert endpoints["/public"]["security"] == []
+    assert endpoints["/public"]["request_schema"]["query_params"] == {}
+    assert endpoints["/public"]["request_schema"]["headers"] == {}
+
+
+def test_common_dates_skip_invalid_higher_priority_values():
+    detail = {
+        "metadata": {"등록일": ["2025-01-02"], "차기 등록 예정일": ["2025-02-03"]},
+        "schema_org": [],
+        "api_specs": [],
+        "attachments": [],
+        "tables": [],
+        "detail_format": "TABLE",
+    }
+    sources = [{"record": {"created_at": "unknown", "next_registration_date": "unknown"}}]
+
+    document = normalize_catalog(parse_input("FILE", detail, sources=sources)).document
+
+    assert document["created_at"] == datetime(2025, 1, 2, tzinfo=timezone.utc)
+    assert document["next_registration_date"] == datetime(2025, 2, 3, tzinfo=timezone.utc)
+
+
+def test_common_metadata_promotes_document_context_without_discarding_raw_sources():
+    detail = {
+        "metadata": {
+            "제공기관": ["공공기관"],
+            "관리부서명": ["데이터부"],
+            "관리부서 전화번호": ["02-0000-0000"],
+            "보유근거": ["공공데이터법"],
+            "수집방법": ["행정시스템"],
+            "업데이트 주기": ["월간"],
+            "차기 등록 예정일": ["2026-10-01"],
+            "매체유형": ["텍스트"],
+            "전체 행": ["1,234"],
+            "데이터 한계": ["일부 공란"],
+            "기타 유의사항": ["기준일 확인"],
+            "공간범위": ["대한민국"],
+            "시간범위": ["2025년"],
+            "비용부과유무": ["무료"],
+            "비용부과기준 및 단위": ["건"],
+            "이용허락범위": ["출처표시"],
+            "등록일": ["2025-01-02"],
+            "수정일": ["2026-09-01"],
+        },
+        "schema_org": [
+            {
+                "@type": "Dataset",
+                "name": "Schema title",
+                "datePublished": "2025-01-03",
+                "license": "https://license.example/open",
+            },
+            {"@type": "WebPage", "name": "상세 페이지"},
+        ],
+        "api_specs": [],
+        "attachments": [{"name": "guide.pdf", "file_id": "guide"}],
+        "tables": [],
+        "detail_format": "TABLE",
+    }
+
+    document = normalize_catalog(parse_input("FILE", detail)).document
+
+    assert document["organization"] == "공공기관"
+    assert document["department"] == "데이터부"
+    assert document["created_at"] == datetime(2025, 1, 2, tzinfo=timezone.utc)
+    assert document["published_at"] == datetime(2025, 1, 3, tzinfo=timezone.utc)
+    assert document["update_at"] == datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert document["source_url"] == "https://www.data.go.kr/data/7/file.do"
+    assert document["license"] == "https://license.example/open"
+    assert document["ownership_grounds"] == "공공데이터법"
+    assert document["collection_method"] == "행정시스템"
+    assert document["update_cycle"] == "월간"
+    assert document["next_registration_date"] == datetime(2026, 10, 1, tzinfo=timezone.utc)
+    assert document["media_type"] == "텍스트"
+    assert document["row_count"] == 1234
+    assert document["data_limit"] == "일부 공란"
+    assert document["notes"] == "기준일 확인"
+    assert document["spatial_coverage"] == "대한민국"
+    assert document["temporal_coverage"] == "2025년"
+    assert document["pricing_basis"] == "건"
+    assert document["contact"] == {"department": "데이터부", "phone": "02-0000-0000"}
+    assert document["metadata"] == detail["metadata"]
+    assert document["schema_org"] == detail["schema_org"][0]
+    assert document["schema_org_raw"] == detail["schema_org"]
+    assert document["distributions"] == detail["attachments"]
+
+
+def test_common_contact_uses_source_and_schema_org_when_metadata_is_missing():
+    source_detail = {
+        "metadata": {},
+        "schema_org": [],
+        "api_specs": [],
+        "attachments": [],
+        "tables": [],
+        "detail_format": "TABLE",
+    }
+    source = {
+        "record": {
+            "dept_nm": "API부",
+            "contact_tel": "02-1111-2222",
+            "contact_email": "api@example.test",
+            "cost_unit": "건당 10원",
+        }
+    }
+    schema_detail = {
+        **source_detail,
+        "schema_org": [
+            {
+                "@type": "Dataset",
+                "contactPoint": [
+                    {"name": "데이터 담당자", "telephone": "02-3333-4444"},
+                    {
+                        "email": "data@example.test",
+                        "contactType": "technical support",
+                    },
+                ],
+            }
+        ],
+    }
+
+    source_document = normalize_catalog(
+        parse_input("FILE", source_detail, sources=[source])
+    ).document
+    schema_document = normalize_catalog(parse_input("FILE", schema_detail)).document
+
+    assert source_document["contact"] == {
+        "department": "API부",
+        "phone": "02-1111-2222",
+        "email": "api@example.test",
+    }
+    assert source_document["pricing_basis"] == "건당 10원"
+    assert schema_document["contact"] == {
+        "department": "summary org",
+        "name": "데이터 담당자",
+        "phone": "02-3333-4444",
+        "email": "data@example.test",
+        "type": "technical support",
+    }
 
 
 def test_normalizes_api_with_official_source_and_openapi_endpoints():
@@ -497,6 +762,237 @@ def test_openapi_wins_over_operation_table_instead_of_duplicating_endpoint():
 
     assert len(endpoints) == 1
     assert endpoints[0]["path"] == "/canonical"
+
+
+def test_matching_operation_table_enriches_openapi_endpoint_without_duplication():
+    detail = {
+        "metadata": {},
+        "schema_org": [],
+        "api_specs": [
+            {
+                "openapi": "3.0.0",
+                "servers": [{"url": "https://api.example.test/v1"}],
+                "paths": {
+                    "/items": {
+                        "get": {
+                            "parameters": [
+                                {"name": "page", "in": "query", "schema": {"type": "integer"}}
+                            ],
+                            "responses": {
+                                "200": {
+                                    "description": "ok",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "type": "object",
+                                                "properties": {"name": {"type": "string"}},
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    }
+                },
+            }
+        ],
+        "operation_details": [
+            {
+                "operation": {"name": "목록 조회", "params": {"oprtinSeqNo": "1"}},
+                "data": {
+                    "metadata": {
+                        "요청주소": ["https://api.example.test/v1/items"],
+                        "요청방식": ["GET"],
+                    },
+                    "tables": [
+                        {
+                            "caption": "요청변수",
+                            "headers": ["항목명(영문)", "샘플데이터", "항목설명"],
+                            "rows": [["page", "2", "페이지 번호"]],
+                        },
+                        {
+                            "caption": "출력결과",
+                            "headers": ["항목명(영문)", "항목설명"],
+                            "rows": [["name", "자료명"]],
+                        },
+                    ],
+                },
+            }
+        ],
+        "attachments": [],
+        "tables": [],
+        "detail_format": "SWAGGER",
+    }
+
+    endpoints = normalize_catalog(parse_input("API", detail)).document["endpoints"]
+
+    assert len(endpoints) == 1
+    endpoint = endpoints[0]
+    assert endpoint["path"] == "/items"
+    assert endpoint["absolute_url"] == "https://api.example.test/v1/items"
+    assert endpoint["name"] == "목록 조회"
+    assert endpoint["request_schema"]["query_params"]["page"]["description"] == "페이지 번호"
+    assert endpoint["request_schema"]["query_params"]["page"]["example"] == "2"
+    assert (
+        endpoint["response_schemas"]["200"]["data_schema"]["properties"]["name"]["description"]
+        == "자료명"
+    )
+    assert endpoint["raw_tables"] == detail["operation_details"][0]["data"]["tables"]
+
+
+def test_known_absolute_endpoint_does_not_suffix_match_another_api_version():
+    detail = {
+        "metadata": {},
+        "schema_org": [],
+        "api_specs": [
+            {
+                "openapi": "3.0.0",
+                "servers": [{"url": "https://api.example.test/v1"}],
+                "paths": {"/items": {"get": {"responses": {}}}},
+            }
+        ],
+        "operation_details": [
+            {
+                "operation": {"name": "v2", "url": "https://api.example.test/v2/items"},
+                "data": {
+                    "metadata": {"요청방식": ["GET"]},
+                    "tables": [{"caption": "v2", "headers": [], "rows": []}],
+                },
+            }
+        ],
+        "attachments": [],
+        "tables": [],
+        "detail_format": "SWAGGER",
+    }
+
+    endpoints = normalize_catalog(parse_input("API", detail)).document["endpoints"]
+
+    assert len(endpoints) == 2
+    assert endpoints[0]["absolute_url"] == "https://api.example.test/v1/items"
+    assert "raw_tables" not in endpoints[0]
+    assert endpoints[1]["path"] == "https://api.example.test/v2/items"
+
+
+def test_operation_table_matching_prefers_exact_server_url_over_ambiguous_suffix():
+    detail = {
+        "metadata": {},
+        "schema_org": [],
+        "api_specs": [
+            {
+                "openapi": "3.0.0",
+                "servers": [{"url": "https://api.example.test/v1"}],
+                "paths": {"/items": {"get": {"responses": {}}}},
+            }
+        ],
+        "operation_details": [
+            {
+                "operation": {"name": "v2", "url": "https://api.example.test/v2/items"},
+                "data": {
+                    "metadata": {"요청방식": ["GET"]},
+                    "tables": [{"caption": "v2", "headers": [], "rows": []}],
+                },
+            },
+            {
+                "operation": {"name": "v1", "url": "https://api.example.test/v1/items"},
+                "data": {
+                    "metadata": {"요청방식": ["GET"]},
+                    "tables": [{"caption": "v1", "headers": [], "rows": []}],
+                },
+            },
+        ],
+        "attachments": [],
+        "tables": [],
+        "detail_format": "SWAGGER",
+    }
+
+    endpoints = normalize_catalog(parse_input("API", detail)).document["endpoints"]
+
+    assert endpoints[0]["path"] == "/items"
+    assert endpoints[0]["absolute_url"] == "https://api.example.test/v1/items"
+    assert endpoints[0]["name"] == "v1"
+    assert endpoints[0]["raw_tables"][0]["caption"] == "v1"
+    assert any(endpoint["path"].endswith("/v2/items") for endpoint in endpoints[1:])
+
+
+def test_operation_table_enriches_array_schema_without_changing_openapi_structure():
+    detail = {
+        "metadata": {},
+        "schema_org": [],
+        "api_specs": [
+            {
+                "openapi": "3.0.0",
+                "paths": {
+                    "/items": {
+                        "get": {
+                            "parameters": [
+                                {"name": "page", "in": "query", "schema": {"type": "integer"}}
+                            ],
+                            "responses": {
+                                "200": {
+                                    "description": "ok",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {"name": {"type": "string"}},
+                                                },
+                                            }
+                                        }
+                                    },
+                                }
+                            },
+                        }
+                    }
+                },
+            }
+        ],
+        "operation_details": [
+            {
+                "operation": {
+                    "name": "목록 조회",
+                    "url": "https://api.example.test/items",
+                },
+                "data": {
+                    "metadata": {"요청방식": ["GET"]},
+                    "tables": [
+                        {
+                            "caption": "요청변수",
+                            "headers": ["항목명(영문)", "샘플데이터", "항목설명"],
+                            "rows": [
+                                ["page", "2", "페이지 번호"],
+                                ["htmlOnly", "x", "명세에 없는 변수"],
+                            ],
+                        },
+                        {
+                            "caption": "출력결과",
+                            "headers": ["항목명(영문)", "항목설명"],
+                            "rows": [
+                                ["name", "자료명"],
+                                ["htmlOnly", "명세에 없는 결과"],
+                            ],
+                        },
+                    ],
+                },
+            }
+        ],
+        "attachments": [],
+        "tables": [],
+        "detail_format": "SWAGGER",
+    }
+
+    endpoint = normalize_catalog(parse_input("API", detail)).document["endpoints"][0]
+    query = endpoint["request_schema"]["query_params"]
+    schema = endpoint["response_schemas"]["200"]["data_schema"]
+
+    assert set(query) == {"page"}
+    assert query["page"]["description"] == "페이지 번호"
+    assert schema["type"] == "array"
+    assert "properties" not in schema
+    assert set(schema["items"]["properties"]) == {"name"}
+    assert schema["items"]["properties"]["name"]["description"] == "자료명"
+    assert endpoint["raw_tables"] == detail["operation_details"][0]["data"]["tables"]
 
 
 def test_file_history_uses_detail_and_history_sequence_as_identity():

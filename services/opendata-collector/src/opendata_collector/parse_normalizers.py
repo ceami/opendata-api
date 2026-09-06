@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
 from .parsers import parse_dcat_metadata
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put", "trace"}
 
 
@@ -49,6 +50,82 @@ def _integer(value: Any, default: int = 0) -> int:
         return int(str(value).replace(",", "").strip())
     except (TypeError, ValueError):
         return default
+
+
+def _optional_integer(value: Any) -> int | None:
+    if not _nonempty(value) or isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _date(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=value.tzinfo or timezone.utc).astimezone(timezone.utc)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)
+    if not _nonempty(value):
+        return None
+    raw = str(value).strip()
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        parsed = None
+    if parsed is None:
+        for date_format in ("%Y.%m.%d", "%Y/%m/%d", "%Y%m%d", "%Y-%m-%d %H:%M:%S"):
+            try:
+                parsed = datetime.strptime(raw, date_format)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        return None
+    return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(timezone.utc)
+
+
+def _first_date(*values: Any) -> datetime | None:
+    for value in values:
+        parsed = _date(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _schema_annotations(schema: dict[str, Any]) -> dict[str, Any]:
+    annotations = {}
+    for key in (
+        "title",
+        "default",
+        "example",
+        "examples",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "minProperties",
+        "maxProperties",
+        "nullable",
+        "readOnly",
+        "writeOnly",
+        "deprecated",
+        "discriminator",
+    ):
+        if key not in schema:
+            continue
+        value = schema[key]
+        if _nonempty(value) or value in (False, 0):
+            annotations[key] = value
+    return annotations
 
 
 def _strings(value: Any) -> list[str]:
@@ -91,11 +168,17 @@ def _official_record(source_records: list[dict[str, Any]]) -> dict[str, Any]:
     return merged
 
 
-def _schema_dataset(detail: dict[str, Any]) -> dict[str, Any]:
+def _schema_documents(detail: dict[str, Any]) -> list[dict[str, Any]]:
     documents = detail.get("schema_org", [])
     if isinstance(documents, dict):
         documents = [documents]
-    for value in documents:
+    if not isinstance(documents, list):
+        return []
+    return [dict(value) for value in documents if isinstance(value, dict)]
+
+
+def _schema_dataset(detail: dict[str, Any]) -> dict[str, Any]:
+    for value in _schema_documents(detail):
         if not isinstance(value, dict):
             continue
         graph = value.get("@graph")
@@ -155,68 +238,150 @@ def _resolve_schema(
                 if isinstance(additional, dict)
                 else additional
             )
+        result.update(_schema_annotations(schema))
         return result
     if schema_type == "array" or "items" in schema:
-        return {
+        result = {
             "type": schema_type or "array",
             "items": _resolve_schema(spec, schema.get("items", {}), seen),
             "description": schema.get("description", ""),
         }
+        result.update(_schema_annotations(schema))
+        return result
     for composition in ("allOf", "oneOf", "anyOf"):
         if composition in schema:
-            return {
+            result = {
                 composition: [
                     _resolve_schema(spec, value, seen) for value in schema.get(composition, [])
                 ],
                 "description": schema.get("description", ""),
             }
-    return {
+            result.update(_schema_annotations(schema))
+            return result
+    result = {
         "type": schema_type or "object",
         "description": schema.get("description", ""),
         "format": schema.get("format"),
         "enum": schema.get("enum"),
     }
+    result.update(_schema_annotations(schema))
+    return result
 
 
 def _parameter(spec: dict[str, Any], value: dict[str, Any]) -> dict[str, Any]:
     schema = value.get("schema", {})
-    parameter_type = value.get("type")
-    if not parameter_type and isinstance(schema, dict):
-        parameter_type = schema.get("type")
+    if not isinstance(schema, dict):
+        schema = {}
+    parameter_type = _first(value.get("type"), schema.get("type"), default="object")
     result = {
         "name": str(value.get("name", "")),
         "description": value.get("description", ""),
-        "type": parameter_type or "object",
+        "type": parameter_type,
         "required": bool(value.get("required", value.get("in") == "path")),
         "in_": value.get("in", ""),
     }
-    if value.get("in") == "body" and isinstance(schema, dict):
+    for key in (
+        "format",
+        "default",
+        "example",
+        "examples",
+        "enum",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "nullable",
+        "style",
+        "explode",
+        "allowEmptyValue",
+        "deprecated",
+    ):
+        field_value = value[key] if key in value else schema.get(key)
+        if _nonempty(field_value) or field_value in (False, 0):
+            result[key] = field_value
+    if value.get("in") == "body" and schema:
         result["schema"] = _resolve_schema(spec, schema)
     return result
 
 
-def _security_headers(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _security_schemes(spec: dict[str, Any]) -> dict[str, dict[str, Any]]:
     schemes = spec.get("securityDefinitions", {})
-    if not schemes:
-        schemes = spec.get("components", {}).get("securitySchemes", {})
-    result = {}
-    for value in schemes.values() if isinstance(schemes, dict) else []:
+    if not schemes and isinstance(spec.get("components"), dict):
+        schemes = spec["components"].get("securitySchemes", {})
+    if not isinstance(schemes, dict):
+        return {}
+    return {name: dict(value) for name, value in schemes.items() if isinstance(value, dict)}
+
+
+def _security_requirements(spec: dict[str, Any], operation: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = operation["security"] if "security" in operation else spec.get("security", [])
+    if not isinstance(raw, list):
+        return []
+    return [dict(requirement) for requirement in raw if isinstance(requirement, dict)]
+
+
+def _security_parameters(
+    spec: dict[str, Any], requirements: list[dict[str, Any]]
+) -> dict[str, dict[str, dict[str, Any]]]:
+    result: dict[str, dict[str, dict[str, Any]]] = {
+        "header": {},
+        "query": {},
+        "cookie": {},
+    }
+    referenced = {name for requirement in requirements for name in requirement}
+    for scheme_name, value in _security_schemes(spec).items():
         if (
-            not isinstance(value, dict)
+            scheme_name not in referenced
             or value.get("type") != "apiKey"
-            or value.get("in") != "header"
+            or value.get("in") not in result
         ):
             continue
         name = value.get("name")
-        if name:
-            result[name] = {
-                "name": name,
-                "description": value.get("description", ""),
-                "type": "string",
-                "required": True,
-                "in_": "header",
-            }
+        if not name:
+            continue
+        result[value["in"]][str(name)] = {
+            "name": str(name),
+            "description": value.get("description", ""),
+            "type": "string",
+            "required": all(scheme_name in requirement for requirement in requirements),
+            "in_": value["in"],
+            "security_scheme": scheme_name,
+        }
     return result
+
+
+def _spec_servers(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    servers = spec.get("servers", [])
+    if isinstance(servers, list):
+        valid = [
+            dict(server) for server in servers if isinstance(server, dict) and server.get("url")
+        ]
+        if valid:
+            return valid
+    host = spec.get("host")
+    if not host:
+        return []
+    base_path = str(spec.get("basePath", "")).strip("/")
+    schemes = _strings(spec.get("schemes")) or ["https"]
+    return [
+        {"url": f"{scheme}://{host}" + (f"/{base_path}" if base_path else "")} for scheme in schemes
+    ]
+
+
+def _absolute_url(path: Any, servers: list[dict[str, Any]]) -> str:
+    path_value = str(path or "")
+    if urlsplit(path_value).scheme or len(servers) != 1:
+        return path_value if urlsplit(path_value).scheme else ""
+    base_url = str(servers[0].get("url", "")).strip()
+    if not base_url:
+        return ""
+    return f"{base_url.rstrip('/')}/{path_value.lstrip('/')}"
 
 
 def _request_body(spec: dict[str, Any], operation: dict[str, Any]) -> dict[str, Any]:
@@ -248,7 +413,9 @@ def _response(spec: dict[str, Any], code: Any, value: Any) -> dict[str, Any]:
     schema = value.get("schema")
     examples = value.get("examples", {})
     content = value.get("content", {})
+    content_types: list[str] = []
     if isinstance(content, dict) and content:
+        content_types = list(content)
         first_media = next((media for media in content.values() if isinstance(media, dict)), {})
         schema = first_media.get("schema", schema)
         examples = {
@@ -256,35 +423,49 @@ def _response(spec: dict[str, Any], code: Any, value: Any) -> dict[str, Any]:
             for media_type, media in content.items()
             if isinstance(media, dict) and _nonempty(media.get("example", media.get("examples")))
         }
-    return {
+    result = {
         "code": str(code),
         "description": value.get("description", ""),
         "data_schema": _resolve_schema(spec, schema),
         "examples": examples if isinstance(examples, dict) else {},
     }
+    if content_types:
+        result["content_types"] = content_types
+    if isinstance(value.get("headers"), dict) and value["headers"]:
+        result["headers"] = value["headers"]
+    if isinstance(value.get("links"), dict) and value["links"]:
+        result["links"] = value["links"]
+    return result
 
 
 def parse_openapi_endpoints(spec: dict[str, Any], list_id: int) -> list[dict[str, Any]]:
-    """Convert OpenAPI 2/3 operations to the legacy parsed endpoint shape."""
+    """Convert OpenAPI 2/3 operations without dropping document-generation context."""
     if not isinstance(spec, dict):
         return []
     endpoints = []
-    security_headers = _security_headers(spec)
+    default_servers = _spec_servers(spec)
     for path, path_item in spec.get("paths", {}).items():
         if not isinstance(path_item, dict):
             continue
         path_parameters = path_item.get("parameters", [])
+        if not isinstance(path_parameters, list):
+            path_parameters = []
         for method, operation in path_item.items():
             if method.lower() not in HTTP_METHODS or not isinstance(operation, dict):
                 continue
+            security = _security_requirements(spec, operation)
+            security_parameters = _security_parameters(spec, security)
             request_schema = {
-                "headers": dict(security_headers),
-                "query_params": {},
+                "headers": dict(security_parameters["header"]),
+                "query_params": dict(security_parameters["query"]),
                 "path_params": {},
-                "cookie_params": {},
+                "cookie_params": dict(security_parameters["cookie"]),
                 "request_body": {},
             }
-            parameters = [*path_parameters, *operation.get("parameters", [])]
+            operation_parameters = operation.get("parameters", [])
+            if not isinstance(operation_parameters, list):
+                operation_parameters = []
+            parameters = [*path_parameters, *operation_parameters]
             for raw_parameter in parameters:
                 if not isinstance(raw_parameter, dict):
                     continue
@@ -317,24 +498,121 @@ def parse_openapi_endpoints(spec: dict[str, Any], list_id: int) -> list[dict[str
                 if response["examples"]:
                     example = next(iter(response["examples"].values()))
                     break
-            endpoints.append(
-                {
-                    "id": f"{list_id}_{path}_{method.upper()}",
-                    "path": path,
-                    "method": method.upper(),
-                    "request_schema": request_schema,
-                    "response_schemas": responses,
-                    "example_response_data": example,
-                    "example_request_string": None,
-                }
+            servers = operation.get("servers", path_item.get("servers", default_servers))
+            if not isinstance(servers, list):
+                servers = default_servers
+            servers = [dict(server) for server in servers if isinstance(server, dict)]
+            endpoint = {
+                "id": f"{list_id}_{path}_{method.upper()}",
+                "path": path,
+                "method": method.upper(),
+                "request_schema": request_schema,
+                "response_schemas": responses,
+                "example_response_data": example,
+                "example_request_string": None,
+            }
+            optional_fields = {
+                "name": _first(operation.get("summary"), operation.get("operationId")),
+                "description": operation.get("description"),
+                "operation_id": operation.get("operationId"),
+                "tags": operation.get("tags"),
+                "servers": servers,
+                "security": security,
+                "consumes": operation.get("consumes", spec.get("consumes")),
+                "produces": operation.get("produces", spec.get("produces")),
+                "absolute_url": _absolute_url(path, servers),
+            }
+            if "deprecated" in operation:
+                optional_fields["deprecated"] = bool(operation["deprecated"])
+            endpoint.update(
+                {key: value for key, value in optional_fields.items() if _nonempty(value)}
             )
+            if "security" in operation or "security" in spec:
+                endpoint["security"] = security
+            endpoints.append(endpoint)
     return endpoints
+
+
+def _schema_creator(schema: dict[str, Any]) -> str:
+    creators = schema.get("creator")
+    if not isinstance(creators, list):
+        creators = [creators]
+    for creator in creators:
+        if isinstance(creator, dict):
+            value = _first(creator.get("name"), creator.get("legalName"))
+        else:
+            value = creator
+        if _nonempty(value):
+            return str(value)
+    return ""
+
+
+def _contact_parts(value: Any) -> dict[str, Any]:
+    values = value if isinstance(value, list) else [value]
+    result: dict[str, Any] = {}
+    for item in values:
+        if isinstance(item, dict):
+            aliases = {
+                "name": ("name", "contactName"),
+                "phone": ("telephone", "phone", "contact_tel"),
+                "email": ("email", "contact_email"),
+                "type": ("contactType", "type"),
+            }
+            for output_key, source_keys in aliases.items():
+                candidate = _first(*(item.get(key) for key in source_keys), default="")
+                if _nonempty(candidate) and not _nonempty(result.get(output_key)):
+                    result[output_key] = candidate
+        elif _nonempty(item):
+            key = "email" if "@" in str(item) else "phone"
+            result.setdefault(key, str(item))
+    return {key: value for key, value in result.items() if _nonempty(value)}
+
+
+def _contact(
+    metadata: dict[str, Any],
+    source: dict[str, Any],
+    schema: dict[str, Any],
+    department: str,
+) -> dict[str, Any]:
+    source_contact = _contact_parts([source.get("contact"), source.get("contact_info")])
+    schema_contact = _contact_parts(schema.get("contactPoint"))
+    contact = {
+        "department": department,
+        "name": _first(
+            source.get("contact_name"),
+            source_contact.get("name"),
+            schema_contact.get("name"),
+            _metadata_value(metadata, "담당자명", "담당자"),
+        ),
+        "phone": _first(
+            source.get("contact_tel"),
+            source_contact.get("phone"),
+            schema_contact.get("phone"),
+            _metadata_value(
+                metadata,
+                "관리부서 전화번호",
+                "관리부서전화번호",
+                "담당자 연락처",
+                "연락처",
+            ),
+        ),
+        "email": _first(
+            source.get("contact_email"),
+            source_contact.get("email"),
+            schema_contact.get("email"),
+            _metadata_value(metadata, "담당자 이메일", "이메일"),
+        ),
+        "type": _first(source_contact.get("type"), schema_contact.get("type")),
+    }
+    return {key: value for key, value in contact.items() if _nonempty(value)}
 
 
 def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     catalog, detail = parse_input.catalog, parse_input.detail
     source = _official_record(parse_input.source_records)
     metadata = detail.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
     schema = _schema_dataset(detail)
     summary = catalog.get("summary", {})
     if not isinstance(summary, dict):
@@ -349,11 +627,16 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         _metadata_value(metadata, "설명", "데이터 설명", "Description"),
         summary.get("description"),
     )
+    organization = _first(
+        source.get("org_nm"),
+        _schema_creator(schema),
+        _metadata_value(metadata, "제공기관", "소관기관", "기관명"),
+        summary.get("org_nm"),
+    )
     department = _first(
         source.get("dept_nm"),
-        source.get("org_nm"),
-        _metadata_value(metadata, "제공기관", "관리부서명", "기관명"),
-        summary.get("org_nm"),
+        _metadata_value(metadata, "관리부서명", "담당부서", "부서명"),
+        organization,
     )
     category = _first(
         source.get("category_nm"),
@@ -365,6 +648,31 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         source.get("ext"),
         _metadata_value(metadata, "확장자", "데이터포맷", "포맷"),
         detail.get("detail_format"),
+    )
+    created_at = _first_date(
+        source.get("created_at"),
+        source.get("reg_date"),
+        schema.get("dateCreated"),
+        _metadata_value(metadata, "등록일", "생성일"),
+    )
+    published_at = _first_date(
+        source.get("published_at"),
+        schema.get("datePublished"),
+        _metadata_value(metadata, "공개일", "게시일"),
+    )
+    update_at = _first_date(
+        source.get("updated_at"),
+        source.get("update_at"),
+        schema.get("dateModified"),
+        _metadata_value(metadata, "수정일", "최종수정일", "갱신일"),
+    )
+    pricing = _first(source.get("is_charged"), _metadata_value(metadata, "비용부과유무"))
+    license_value = _first(
+        schema.get("license"),
+        source.get("share_scope_nm"),
+        source.get("share_scope_reason"),
+        source.get("use_prmisn_ennc"),
+        _metadata_value(metadata, "이용허락범위", "이용 허락 범위", "라이선스"),
     )
     status = (
         "completed"
@@ -378,12 +686,54 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         "data_type": catalog.get("data_type"),
         "title": title,
         "description": description,
+        "organization": organization,
         "department": department,
         "category": category,
         "data_format": data_format,
-        "created_at": _first(source.get("created_at"), source.get("reg_date"), default=None),
-        "update_at": _first(source.get("updated_at"), source.get("update_at"), default=None),
-        "pricing": _first(source.get("is_charged"), _metadata_value(metadata, "비용부과유무")),
+        "created_at": created_at,
+        "published_at": published_at,
+        "update_at": update_at,
+        "source_url": _first(catalog.get("detail_url"), source.get("meta_url")),
+        "license": license_value,
+        "ownership_grounds": _first(
+            source.get("ownership_grounds"), _metadata_value(metadata, "보유근거")
+        ),
+        "collection_method": _first(
+            source.get("collection_method"), _metadata_value(metadata, "수집방법")
+        ),
+        "update_cycle": _first(
+            source.get("update_cycle"), _metadata_value(metadata, "업데이트 주기", "갱신주기")
+        ),
+        "next_registration_date": _first_date(
+            source.get("next_registration_date"),
+            _metadata_value(metadata, "차기 등록 예정일", "차기등록예정일"),
+        ),
+        "media_type": _first(source.get("media_type"), _metadata_value(metadata, "매체유형")),
+        "row_count": _optional_integer(
+            _first(
+                source.get("row_count"),
+                source.get("media_cnt"),
+                _metadata_value(metadata, "전체 행", "전체행", "데이터수"),
+                default=None,
+            )
+        ),
+        "data_limit": _first(
+            source.get("data_limit"), _metadata_value(metadata, "데이터 한계", "데이터한계")
+        ),
+        "notes": _first(source.get("etc"), _metadata_value(metadata, "기타 유의사항", "유의사항")),
+        "spatial_coverage": _first(
+            schema.get("spatialCoverage"), _metadata_value(metadata, "공간범위")
+        ),
+        "temporal_coverage": _first(
+            schema.get("temporalCoverage"), _metadata_value(metadata, "시간범위")
+        ),
+        "pricing_basis": _first(
+            source.get("cost_unit"),
+            _metadata_value(metadata, "비용부과기준 및 단위", "비용 부과기준 및 단위"),
+        ),
+        "contact": _contact(metadata, source, schema, str(department)),
+        "is_core_data": _first(source.get("is_core_data"), source.get("core_data_nm")),
+        "pricing": pricing,
         "copyright": _first(source.get("is_copyrighted"), _metadata_value(metadata, "저작권")),
         "third_party_copyright": _first(
             source.get("is_third_party_copyrighted"),
@@ -402,6 +752,12 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         "title_en": _first(source.get("title_en"), default=""),
         "register_status": _first(source.get("register_status"), default=""),
         "use_prmisn_ennc": _first(source.get("use_prmisn_ennc"), default=""),
+        "metadata": dict(metadata),
+        "schema_org": dict(schema),
+        "schema_org_raw": _schema_documents(detail),
+        "attachments": [
+            dict(item) for item in detail.get("attachments", []) if isinstance(item, dict)
+        ],
         "source_catalog_id": catalog.get("_id"),
         "source_fingerprint": parse_input.source_fingerprint,
         "parser_version": PARSER_VERSION,
@@ -612,27 +968,244 @@ def _source_endpoints(source_records: list[dict[str, Any]], list_id: int) -> lis
     return endpoints
 
 
+def _path_only(value: Any) -> str:
+    path = urlsplit(str(value or "")).path.rstrip("/")
+    return path or "/"
+
+
+def _url_identity(value: Any) -> str:
+    parsed = urlsplit(str(value or ""))
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip('/') or '/'}"
+
+
+def _matching_endpoint(
+    endpoint: dict[str, Any], candidates: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    endpoint_method = str(endpoint.get("method", "GET")).upper()
+    same_method = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("method", "GET")).upper() == endpoint_method
+    ]
+    absolute_identity = _url_identity(endpoint.get("absolute_url"))
+    exact_urls = [
+        candidate
+        for candidate in same_method
+        if absolute_identity and _url_identity(candidate.get("path")) == absolute_identity
+    ]
+    if len(exact_urls) == 1:
+        return exact_urls[0]
+
+    endpoint_path = _path_only(endpoint.get("path"))
+    exact_paths = [
+        candidate
+        for candidate in same_method
+        if (not absolute_identity or not _url_identity(candidate.get("path")))
+        and _path_only(candidate.get("path")) == endpoint_path
+    ]
+    if len(exact_paths) == 1:
+        return exact_paths[0]
+
+    suffix_matches = []
+    if endpoint_path != "/":
+        suffix_matches = [
+            candidate
+            for candidate in same_method
+            if (not absolute_identity or not _url_identity(candidate.get("path")))
+            and (candidate_path := _path_only(candidate.get("path"))) != "/"
+            and (candidate_path.endswith(endpoint_path) or endpoint_path.endswith(candidate_path))
+        ]
+    return suffix_matches[0] if len(suffix_matches) == 1 else None
+
+
+def _merge_missing(target: Any, supplemental: Any) -> Any:
+    if isinstance(target, dict) and isinstance(supplemental, dict):
+        for key, value in supplemental.items():
+            if key in target:
+                target[key] = _merge_missing(target[key], value)
+            elif _nonempty(value) or value in (False, 0):
+                target[key] = value
+        return target
+    if not _nonempty(target) and (_nonempty(supplemental) or supplemental in (False, 0)):
+        return supplemental
+    return target
+
+
+def _enrich_descriptive_fields(target: dict[str, Any], supplemental: dict[str, Any]) -> None:
+    for key in ("description", "example", "examples", "default", "name_ko", "size"):
+        if key in supplemental:
+            target[key] = _merge_missing(target.get(key), supplemental[key])
+
+
+def _enrich_request_schema(target: dict[str, Any], supplemental: dict[str, Any]) -> None:
+    for location in ("headers", "query_params", "path_params", "cookie_params"):
+        target_parameters = target.get(location, {})
+        supplemental_parameters = supplemental.get(location, {})
+        if not isinstance(target_parameters, dict) or not isinstance(supplemental_parameters, dict):
+            continue
+        for name, parameter in target_parameters.items():
+            other = supplemental_parameters.get(name)
+            if isinstance(parameter, dict) and isinstance(other, dict):
+                _enrich_descriptive_fields(parameter, other)
+
+
+def _schema_properties(schema: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(schema, dict):
+        return {}
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        return {}
+    return {name: value for name, value in properties.items() if isinstance(value, dict)}
+
+
+def _enrich_schema_properties(
+    target: Any, supplemental_properties: dict[str, dict[str, Any]]
+) -> None:
+    if not isinstance(target, dict):
+        return
+    properties = target.get("properties", {})
+    if isinstance(properties, dict):
+        for name, value in properties.items():
+            if not isinstance(value, dict):
+                continue
+            other = supplemental_properties.get(name)
+            if isinstance(other, dict):
+                _enrich_descriptive_fields(value, other)
+            _enrich_schema_properties(value, supplemental_properties)
+    _enrich_schema_properties(target.get("items"), supplemental_properties)
+    for composition in ("allOf", "oneOf", "anyOf"):
+        values = target.get(composition, [])
+        if isinstance(values, list):
+            for value in values:
+                _enrich_schema_properties(value, supplemental_properties)
+
+
+def _enrich_response_schemas(target: dict[str, Any], supplemental: dict[str, Any]) -> None:
+    for code, response in target.items():
+        other = supplemental.get(code)
+        if not isinstance(response, dict) or not isinstance(other, dict):
+            continue
+        _enrich_descriptive_fields(response, other)
+        supplemental_properties = _schema_properties(other.get("data_schema"))
+        _enrich_schema_properties(response.get("data_schema"), supplemental_properties)
+
+
+def _merge_endpoint(primary: dict[str, Any], supplemental: dict[str, Any]) -> None:
+    supplemental_path = str(supplemental.get("path", ""))
+    if urlsplit(supplemental_path).scheme:
+        primary["absolute_url"] = supplemental_path
+    for key in (
+        "name",
+        "description",
+        "operation_id",
+        "tags",
+        "servers",
+        "security",
+        "deprecated",
+        "consumes",
+        "produces",
+        "raw_tables",
+    ):
+        if key in supplemental:
+            primary[key] = _merge_missing(primary.get(key), supplemental[key])
+    request_schema = primary.get("request_schema", {})
+    supplemental_request = supplemental.get("request_schema", {})
+    if isinstance(request_schema, dict) and isinstance(supplemental_request, dict):
+        _enrich_request_schema(request_schema, supplemental_request)
+    response_schemas = primary.get("response_schemas", {})
+    supplemental_responses = supplemental.get("response_schemas", {})
+    if isinstance(response_schemas, dict) and isinstance(supplemental_responses, dict):
+        _enrich_response_schemas(response_schemas, supplemental_responses)
+    if primary.get("example_response_data") is None:
+        primary["example_response_data"] = supplemental.get("example_response_data")
+    if primary.get("example_request_string") is None:
+        primary["example_request_string"] = supplemental.get("example_request_string")
+
+
+def _specification_context(spec: dict[str, Any]) -> dict[str, Any]:
+    info = spec.get("info", {})
+    result = {
+        "version": _first(spec.get("openapi"), spec.get("swagger")),
+        "info": dict(info) if isinstance(info, dict) else {},
+        "servers": _spec_servers(spec),
+        "host": spec.get("host"),
+        "base_path": spec.get("basePath"),
+        "schemes": spec.get("schemes"),
+        "security": spec.get("security"),
+        "external_docs": spec.get("externalDocs"),
+        "tags": spec.get("tags"),
+        "consumes": spec.get("consumes"),
+        "produces": spec.get("produces"),
+    }
+    return {key: value for key, value in result.items() if _nonempty(value)}
+
+
+def _api_context(
+    detail: dict[str, Any], source_records: list[dict[str, Any]], endpoints: list[dict[str, Any]]
+) -> dict[str, Any]:
+    specs = [spec for spec in detail.get("api_specs", []) if isinstance(spec, dict)]
+    base_urls = _unique([server.get("url") for spec in specs for server in _spec_servers(spec)])
+    security_schemes: dict[str, Any] = {}
+    for spec in specs:
+        for name, value in _security_schemes(spec).items():
+            security_schemes.setdefault(name, value)
+    service_urls: list[Any] = []
+    for stored in source_records:
+        record = stored.get("record", stored)
+        if not isinstance(record, dict):
+            continue
+        service_urls.extend(
+            [record.get("end_point_url"), record.get("operation_url"), record.get("soap_url")]
+        )
+    service_urls.extend(
+        endpoint.get("absolute_url", endpoint.get("path"))
+        for endpoint in endpoints
+        if urlsplit(str(endpoint.get("absolute_url", endpoint.get("path", "")))).scheme
+    )
+    return {
+        "base_urls": _unique(base_urls),
+        "service_urls": _unique(service_urls),
+        "security_schemes": security_schemes,
+        "specifications": [_specification_context(spec) for spec in specs],
+    }
+
+
 def _normalize_api(parse_input: ParseInput, document: dict[str, Any]) -> ParsedOutput:
-    endpoints = []
-    for spec in parse_input.detail.get("api_specs", []):
-        endpoints.extend(parse_openapi_endpoints(spec, document["list_id"]))
-    if not endpoints:
-        endpoints.extend(_operation_endpoints(parse_input.detail, document["list_id"]))
+    detail = parse_input.detail
+    endpoints = [
+        endpoint
+        for spec in detail.get("api_specs", [])
+        if isinstance(spec, dict)
+        for endpoint in parse_openapi_endpoints(spec, document["list_id"])
+    ]
+    operation_endpoints = _operation_endpoints(detail, document["list_id"])
+    if endpoints:
+        unmatched = list(operation_endpoints)
+        for endpoint in endpoints:
+            supplemental = _matching_endpoint(endpoint, unmatched)
+            if supplemental is None:
+                continue
+            _merge_endpoint(endpoint, supplemental)
+            unmatched.remove(supplemental)
+        endpoints.extend(
+            endpoint
+            for endpoint in unmatched
+            if not str(endpoint.get("path", "")).startswith("operation:")
+        )
+    else:
+        endpoints = operation_endpoints
     if not endpoints:
         endpoints.extend(_source_endpoints(parse_input.source_records, document["list_id"]))
+    source = _official_record(parse_input.source_records)
     document.update(
         {
-            "api_type": _first(
-                _official_record(parse_input.source_records).get("api_type"), default=""
-            ),
-            "api_confirm_for_dev": _first(
-                _official_record(parse_input.source_records).get("is_confirmed_for_dev"), default=""
-            ),
-            "api_confirm_for_prod": _first(
-                _official_record(parse_input.source_records).get("is_confirmed_for_prod"),
-                default="",
-            ),
+            "api_type": _first(source.get("api_type"), default=""),
+            "api_confirm_for_dev": _first(source.get("is_confirmed_for_dev"), default=""),
+            "api_confirm_for_prod": _first(source.get("is_confirmed_for_prod"), default=""),
             "endpoints": endpoints,
+            **_api_context(detail, parse_input.source_records, endpoints),
         }
     )
     return ParsedOutput("parsed_api_info", document)
@@ -655,14 +1228,17 @@ def _normalize_file(
         )
         popup = popups.get((str(key), str(sequence)), {})
         history.append({**item, **popup})
+    endpoints = [
+        endpoint
+        for spec in detail.get("api_specs", [])
+        if isinstance(spec, dict)
+        for endpoint in parse_openapi_endpoints(spec, document["list_id"])
+    ]
     document.update(
         {
             "api_type": "",
-            "endpoints": [
-                endpoint
-                for spec in detail.get("api_specs", [])
-                for endpoint in parse_openapi_endpoints(spec, document["list_id"])
-            ],
+            "endpoints": endpoints,
+            **_api_context(detail, parse_input.source_records, endpoints),
             "distributions": list(detail.get("attachments", [])),
             "columns": list(detail.get("tables", [])),
             "history": history,

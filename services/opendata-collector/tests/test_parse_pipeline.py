@@ -107,6 +107,27 @@ def test_pipeline_skips_unchanged_reparses_changed_and_supports_force(store):
     assert parsed["parser_version"] == PARSER_VERSION
 
 
+def test_older_parser_version_reparses_even_when_source_fingerprint_matches(store):
+    catalog_id = seed(store)
+    parse_input = next(store.inputs(["API"]))
+    store.db.parsed_api_info.insert_one(
+        {
+            "_id": "old-parser",
+            "list_id": 7,
+            "source_catalog_id": catalog_id,
+            "source_fingerprint": parse_input.source_fingerprint,
+            "parser_version": "1",
+            "parsed_at": NOW,
+        }
+    )
+
+    report = ParsePipeline(store).run(["API"])
+
+    assert report["parsed"] == 1
+    assert report["skipped"] == 0
+    assert store.db.parsed_api_info.find_one({"list_id": 7})["parser_version"] == PARSER_VERSION
+
+
 def test_duplicate_legacy_file_rows_collapse_and_newest_id_is_preserved(store):
     seed(store, "FILE")
     store.db.parsed_file_info.insert_many(

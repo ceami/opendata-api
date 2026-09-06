@@ -30,6 +30,15 @@ class ParsedEndpoint(BaseModel):
     example_response_data: Any | None = Field(default=None)
     example_request_string: str | None = Field(default=None)
     name: str | None = None
+    description: str | None = None
+    operation_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    servers: list[dict[str, Any]] = Field(default_factory=list)
+    security: list[dict[str, Any]] = Field(default_factory=list)
+    deprecated: bool | None = None
+    absolute_url: str | None = None
+    consumes: list[str] = Field(default_factory=list)
+    produces: list[str] = Field(default_factory=list)
     raw_tables: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -205,13 +214,38 @@ class OpenAPIInfo(Document, CollectedMetadata):
 
 
 class ParsedMetadata(BaseModel):
-    """Revision and status metadata shared by deterministic parser outputs."""
+    """Source context plus revision metadata shared by deterministic parser outputs."""
 
     source_catalog_id: str | None = None
     source_fingerprint: str | None = None
     parser_version: str | None = None
     parse_status: Literal["completed", "partial", "failed"] | None = None
     parse_errors: list[dict[str, Any]] = Field(default_factory=list)
+    source_url: str = ""
+    published_at: datetime | None = None
+    organization: str = ""
+    license: Any | None = None
+    ownership_grounds: str = ""
+    collection_method: str = ""
+    update_cycle: str = ""
+    next_registration_date: datetime | str | None = None
+    media_type: str = ""
+    row_count: int | None = None
+    data_limit: str = ""
+    notes: str = ""
+    spatial_coverage: Any | None = None
+    temporal_coverage: Any | None = None
+    pricing_basis: str = ""
+    contact: dict[str, Any] = Field(default_factory=dict)
+    is_core_data: Any | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    schema_org: dict[str, Any] = Field(default_factory=dict)
+    schema_org_raw: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    base_urls: list[str] = Field(default_factory=list)
+    service_urls: list[str] = Field(default_factory=list)
+    security_schemes: dict[str, Any] = Field(default_factory=dict)
+    specifications: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ParsedAPIInfo(Document, ParsedMetadata):
