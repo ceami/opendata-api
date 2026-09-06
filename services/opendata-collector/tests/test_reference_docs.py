@@ -1,6 +1,9 @@
 import io
 import struct
 import zipfile
+import zlib
+
+from pypdf import filters
 
 import opendata_collector.reference_docs as reference_docs
 from opendata_collector.reference_docs import (
@@ -318,3 +321,53 @@ def test_rejects_encrypted_zip_member_before_reading_it():
         "char_count": 0,
         "error": "Malformed DOCX archive",
     }
+
+
+
+def _compressed_pdf(content):
+    stream = zlib.compress(content)
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Count 1/Kids[3 0 R]>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 100 100]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+        b"<</Length %d/Filter/FlateDecode>>\nstream\n%s\nendstream" % (len(stream), stream),
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    payload, offsets = b"%PDF-1.4\n", []
+    for number, content in enumerate(objects, 1):
+        offsets.append(len(payload))
+        payload += b"%d 0 obj\n%s\nendobj\n" % (number, content)
+    xref = len(payload)
+    payload += b"xref\n0 6\n0000000000 65535 f \n"
+    payload += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    return payload + b"trailer\n<</Size 6/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF" % xref
+
+
+def test_pdf_decode_policy_rejects_expansion_and_restores_pypdf_globals(monkeypatch):
+    content = b"BT /F1 12 Tf (" + b"a" * 512 + b") Tj ET"
+    payload = _compressed_pdf(content)
+    assert len(zlib.compress(content)) < 64 < len(content)
+    monkeypatch.setattr(reference_docs, "MAX_PDF_PAGE_STREAM_BYTES", 64, raising=False)
+    names = (
+        "ZLIB_MAX_OUTPUT_LENGTH",
+        "LZW_MAX_OUTPUT_LENGTH",
+        "RUN_LENGTH_MAX_OUTPUT_LENGTH",
+        "MAX_ARRAY_BASED_STREAM_OUTPUT_LENGTH",
+        "MAX_DECLARED_STREAM_LENGTH",
+        "JBIG2_MAX_OUTPUT_LENGTH",
+        "ZLIB_MAX_RECOVERY_INPUT_LENGTH",
+        "FLATE_MAX_BUFFER_SIZE",
+        "FLATE_MAX_COLUMNS",
+        "FLATE_MAX_ROW_LENGTH",
+    )
+    original = {name: getattr(filters, name) for name in names}
+
+    result = extract_reference_text(payload, "guide.pdf", max_chars=1000)
+
+    assert result == {
+        "status": "MALFORMED",
+        "text": "",
+        "char_count": 0,
+        "error": "PDF page stream exceeds extraction limit",
+    }
+    assert {name: getattr(filters, name) for name in names} == original

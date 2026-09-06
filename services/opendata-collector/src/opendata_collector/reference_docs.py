@@ -5,13 +5,16 @@ import io
 import json
 import re
 import struct
+import threading
 import zipfile
 import zlib
+from contextlib import contextmanager
 from urllib.parse import urlencode
 from xml.etree import ElementTree
 
 import olefile
-from pypdf import PdfReader
+from pypdf import PdfReader, filters
+from pypdf.errors import LimitReachedError
 
 BASE_URL = "https://www.data.go.kr"
 DOWNLOAD_PATH = "/cmm/cmm/fileDownload.do"
@@ -27,6 +30,7 @@ HWP_PARA_TEXT = 67
 # Extraction is deliberately bounded before parser libraries receive attacker-controlled content.
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 MAX_PDF_PAGES = 500
+MAX_PDF_PAGE_STREAM_BYTES = 8 * 1024 * 1024
 MAX_ZIP_MEMBERS = 200
 MAX_ZIP_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_ZIP_MEMBER_BYTES = 16 * 1024 * 1024
@@ -38,6 +42,19 @@ MAX_HWP_DECOMPRESSED_BYTES = 64 * 1024 * 1024
 MAX_HWP_RECORD_BYTES = 4 * 1024 * 1024
 MAX_HWP_COMPRESSION_RATIO = 100
 READ_CHUNK_BYTES = 64 * 1024
+PDF_FILTER_LIMITS = (
+    "ZLIB_MAX_OUTPUT_LENGTH",
+    "LZW_MAX_OUTPUT_LENGTH",
+    "RUN_LENGTH_MAX_OUTPUT_LENGTH",
+    "MAX_ARRAY_BASED_STREAM_OUTPUT_LENGTH",
+    "MAX_DECLARED_STREAM_LENGTH",
+    "JBIG2_MAX_OUTPUT_LENGTH",
+    "ZLIB_MAX_RECOVERY_INPUT_LENGTH",
+    "FLATE_MAX_BUFFER_SIZE",
+    "FLATE_MAX_COLUMNS",
+    "FLATE_MAX_ROW_LENGTH",
+)
+_PDF_FILTER_LOCK = threading.RLock()
 
 
 class _Malformed(ValueError):
@@ -627,6 +644,49 @@ def _hwp_into(payload, accumulator):
                 return
 
 
+@contextmanager
+def _pypdf_page_limits(limit):
+    """Temporarily lower pypdf's module-global decoders under one module lock."""
+    with _PDF_FILTER_LOCK:
+        original = {name: getattr(filters, name) for name in PDF_FILTER_LIMITS}
+        try:
+            for name in PDF_FILTER_LIMITS:
+                setattr(filters, name, limit)
+            yield
+        finally:
+            for name, value in original.items():
+                setattr(filters, name, value)
+
+
+def _pdf_streams(page):
+    if not hasattr(page, "get"):
+        return []
+    contents = page.get("/Contents")
+    if contents is None:
+        return []
+    if hasattr(contents, "get_object"):
+        contents = contents.get_object()
+    values = contents if isinstance(contents, (list, tuple)) else [contents]
+    streams = []
+    for value in values:
+        stream = value.get_object() if hasattr(value, "get_object") else value
+        if not hasattr(stream, "get"):
+            raise _Malformed("Malformed PDF document")
+        streams.append(stream)
+    return streams
+
+
+def _pdf_stream_size(stream):
+    raw = getattr(stream, "_data", None)
+    if isinstance(raw, (bytes, bytearray)) and len(raw) > MAX_PDF_PAGE_STREAM_BYTES:
+        raise _Malformed("PDF page stream exceeds extraction limit")
+    declared = stream.get("/Length")
+    if hasattr(declared, "get_object"):
+        declared = declared.get_object()
+    if isinstance(declared, int) and declared > MAX_PDF_PAGE_STREAM_BYTES:
+        raise _Malformed("PDF page stream exceeds extraction limit")
+
+
 def _pdf_into(payload, accumulator):
     reader = PdfReader(io.BytesIO(payload))
     if reader.is_encrypted:
@@ -634,7 +694,14 @@ def _pdf_into(payload, accumulator):
     for number, page in enumerate(reader.pages, 1):
         if number > MAX_PDF_PAGES:
             raise _Malformed("Malformed PDF document")
-        if accumulator.add(page.extract_text() or ""):
+        for stream in _pdf_streams(page):
+            _pdf_stream_size(stream)
+        try:
+            with _pypdf_page_limits(MAX_PDF_PAGE_STREAM_BYTES):
+                text = page.extract_text() or ""
+        except LimitReachedError:
+            raise _Malformed("PDF page stream exceeds extraction limit") from None
+        if accumulator.add(text):
             return
 
 
