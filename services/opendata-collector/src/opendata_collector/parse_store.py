@@ -11,6 +11,7 @@ from typing import Any, Iterable
 import gridfs
 
 from .parse_normalizers import PARSER_VERSION, ParsedOutput, ParseInput
+from .reference_docs import select_reference_attachments
 
 PARSED_COLLECTIONS = {
     "API": "parsed_api_info",
@@ -77,6 +78,16 @@ def source_fingerprint(
                 "url": value.get("url"),
                 "raw_id": value.get("raw_id"),
                 "content_type": value.get("content_type"),
+                "attachment_id": value.get("attachment_id"),
+                "document_sha256": value.get("document_sha256"),
+                "text_sha256": value.get("text_sha256"),
+                "text_raw_id": value.get("text_raw_id"),
+                "extraction_status": value.get("extraction_status"),
+                "extraction_error": value.get("extraction_error"),
+                "char_count": value.get("char_count"),
+                "source": value.get("source"),
+                "name": value.get("name"),
+                "format": value.get("format"),
             }
             for value in resources
         ],
@@ -163,6 +174,7 @@ class ParseStore:
                 except (gridfs.errors.NoFile, gzip.BadGzipFile, json.JSONDecodeError, OSError):
                     errors.append({"error": "Cannot load collected detail payload"})
 
+            self._enrich_reference_attachments(catalog, detail, stored_resources)
             resources = []
             for resource in stored_resources:
                 value = dict(resource)
@@ -187,6 +199,49 @@ class ParseStore:
                 source_fingerprint=source_fingerprint(catalog, source_records, stored_resources),
                 input_errors=errors,
             )
+
+    @staticmethod
+    def _enrich_reference_attachments(catalog, detail, stored_resources):
+        attachments = detail.get("attachments")
+        if not isinstance(attachments, list):
+            return
+        item = {**catalog, "catalog_id": catalog["_id"]}
+        descriptors = select_reference_attachments(item, detail)
+        descriptor_by_fields = {
+            (descriptor["name"], descriptor["file_id"], descriptor["file_detail_sn"]): descriptor
+            for descriptor in descriptors
+        }
+        resources = {
+            value.get("attachment_id"): value
+            for value in stored_resources
+            if value.get("kind") == "reference_document" and value.get("is_active") is not False
+        }
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            name = attachment.get("name")
+            key = (
+                name.strip() if isinstance(name, str) else name,
+                attachment.get("file_id"),
+                attachment.get("file_detail_sn"),
+            )
+            descriptor = descriptor_by_fields.get(key)
+            resource = resources.get(descriptor["attachment_id"]) if descriptor else None
+            if resource is None:
+                continue
+            attachment["reference_document"] = {
+                "resource_id": resource.get("_id"),
+                "document_raw_id": resource.get("raw_id"),
+                "document_sha256": resource.get("document_sha256"),
+                "text_raw_id": resource.get("text_raw_id"),
+                "text_sha256": resource.get("text_sha256"),
+                "source": resource.get("source"),
+                "name": resource.get("name"),
+                "format": resource.get("format"),
+                "extraction_status": resource.get("extraction_status"),
+                "error": resource.get("extraction_error"),
+                "char_count": resource.get("char_count"),
+            }
 
     def is_current(self, parse_input: ParseInput) -> bool:
         collection = PARSED_COLLECTIONS[parse_input.catalog["data_type"]]

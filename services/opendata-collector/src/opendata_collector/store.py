@@ -439,9 +439,7 @@ class SnapshotStore:
                 self.db.portal_snapshot_records.drop_index(index["name"])
 
     def _migrate_legacy_records(self):
-        legacy_rows = self.db.portal_snapshot_records.find(
-            {"snapshot_run_id": {"$exists": False}}
-        )
+        legacy_rows = self.db.portal_snapshot_records.find({"snapshot_run_id": {"$exists": False}})
         for legacy in legacy_rows:
             if legacy.get("run_id"):
                 self.db.portal_snapshot_records.update_one(
@@ -729,3 +727,199 @@ class SnapshotStore:
             "snapshot_only": snapshot_count - matched,
             "current_only": current_count - matched,
         }
+
+
+class ReferenceStore:
+    """Persist independently refreshable official reference-document attachments."""
+
+    def __init__(self, database):
+        self.db = database
+        self.raw = gridfs.GridFS(database, collection="portal_raw")
+
+    def initialize(self):
+        self.db.portal_reference_runs.create_index("started_at")
+        self.db.portal_reference_run_items.create_index([("run_id", 1), ("status", 1)])
+        self.db.portal_reference_run_items.create_index(
+            [("run_id", 1), ("attachment_id", 1)], unique=True
+        )
+        self.db.portal_resources.create_index(
+            [("catalog_id", 1), ("kind", 1), ("attachment_id", 1)]
+        )
+
+    def save_raw(self, content):
+        raw_id = hashlib.sha256(content).hexdigest()
+        if not self.raw.exists(raw_id):
+            try:
+                self.raw.put(
+                    gzip.compress(content, mtime=0),
+                    _id=raw_id,
+                    compression="gzip",
+                    original_bytes=len(content),
+                )
+            except gridfs.errors.FileExists:
+                pass
+        return raw_id
+
+    def load_detail(self, detail_ref):
+        return json.loads(gzip.decompress(self.raw.get(detail_ref).read()))
+
+    def catalogs(self, types):
+        query = {
+            "data_type": {"$in": list(types)},
+            "is_active": {"$ne": False},
+            "detail_status": {"$in": ["completed", "partial"]},
+            "parsed_detail_ref": {"$exists": True},
+        }
+        for catalog in self.db.portal_catalog.find(query).sort([("data_type", 1), ("list_id", 1)]):
+            try:
+                detail = self.load_detail(catalog["parsed_detail_ref"])
+            except (
+                KeyError,
+                gridfs.errors.NoFile,
+                gzip.BadGzipFile,
+                json.JSONDecodeError,
+                OSError,
+            ):
+                continue
+            if isinstance(detail, dict):
+                yield catalog, detail
+
+    def start_run(self, types, max_bytes, max_chars, force):
+        run_id = str(uuid.uuid4())
+        run = {
+            "_id": run_id,
+            "types": list(types),
+            "max_bytes": max_bytes,
+            "max_chars": max_chars,
+            "force": force,
+            "started_at": now(),
+            "updated_at": now(),
+            "status": "running",
+        }
+        self.db.portal_reference_runs.insert_one(run)
+        return run
+
+    def get_run(self, run_id):
+        run = self.db.portal_reference_runs.find_one({"_id": run_id})
+        if run is None:
+            raise ValueError("Unknown reference run ID")
+        return run
+
+    def add_item(self, run_id, descriptor, *, force):
+        existing = self.db.portal_resources.find_one(
+            {
+                "catalog_id": descriptor["catalog_id"],
+                "kind": "reference_document",
+                "attachment_id": descriptor["attachment_id"],
+                "is_active": {"$ne": False},
+            },
+            {"_id": 1},
+        )
+        status = "pending" if force or existing is None else "skipped"
+        item = {
+            "_id": digest(run_id + "\n" + descriptor["attachment_id"]),
+            "run_id": run_id,
+            "attachment_id": descriptor["attachment_id"],
+            "descriptor": descriptor,
+            "status": status,
+            "attempts": 0,
+            "updated_at": now(),
+        }
+        self.db.portal_reference_run_items.update_one(
+            {"_id": item["_id"]}, {"$setOnInsert": item}, upsert=True
+        )
+
+    def pending(self, run_id):
+        return self.db.portal_reference_run_items.find(
+            {"run_id": run_id, "status": {"$in": ["pending", "failed"]}}
+        ).sort("attachment_id", 1)
+
+    def save_document(self, run_id, descriptor, resource, extracted):
+        content = resource.content
+        text = extracted["text"].encode("utf-8")
+        raw_id = self.save_raw(content)
+        text_raw_id = self.save_raw(text)
+        resource_id = digest(
+            "\n".join((descriptor["catalog_id"], descriptor["attachment_id"], raw_id))
+        )
+        collected_at = now()
+        fields = {
+            "catalog_id": descriptor["catalog_id"],
+            "kind": "reference_document",
+            "attachment_id": descriptor["attachment_id"],
+            "url": resource.url,
+            "source": "official_attachment",
+            "name": descriptor["name"],
+            "format": descriptor["format"],
+            "public_data_pk": descriptor["public_data_pk"],
+            "public_data_detail_pk": descriptor["public_data_detail_pk"],
+            "file_id": descriptor["file_id"],
+            "file_detail_sn": descriptor["file_detail_sn"],
+            "raw_id": raw_id,
+            "document_sha256": raw_id,
+            "text_raw_id": text_raw_id,
+            "text_sha256": text_raw_id,
+            "extraction_status": extracted["status"],
+            "extraction_error": extracted["error"],
+            "char_count": extracted["char_count"],
+            "last_seen_run": run_id,
+            "collected_at": collected_at,
+            "is_active": True,
+        }
+        self.db.portal_resources.update_one(
+            {"_id": resource_id}, {"$set": fields, "$unset": {"removed_at": ""}}, upsert=True
+        )
+        # A reference refresh owns only this descriptor's reference-document lifecycle.
+        self.db.portal_resources.update_many(
+            {
+                "catalog_id": descriptor["catalog_id"],
+                "kind": "reference_document",
+                "attachment_id": descriptor["attachment_id"],
+                "_id": {"$ne": resource_id},
+                "is_active": {"$ne": False},
+            },
+            {"$set": {"is_active": False, "removed_at": collected_at}},
+        )
+        self.db.portal_reference_run_items.update_one(
+            {"_id": digest(run_id + "\n" + descriptor["attachment_id"])},
+            {
+                "$set": {
+                    "status": "completed",
+                    "resource_id": resource_id,
+                    "errors": [],
+                    "updated_at": collected_at,
+                },
+                "$inc": {"attempts": 1},
+            },
+        )
+
+    def fail_document(self, run_id, descriptor, error):
+        self.db.portal_reference_run_items.update_one(
+            {"_id": digest(run_id + "\n" + descriptor["attachment_id"])},
+            {
+                "$set": {
+                    "status": "failed",
+                    "errors": [{"error": str(error)[:500]}],
+                    "updated_at": now(),
+                },
+                "$inc": {"attempts": 1},
+            },
+        )
+
+    def report(self, run_id, *, persist=False):
+        run = self.get_run(run_id)
+        counts = {
+            status: self.db.portal_reference_run_items.count_documents(
+                {"run_id": run_id, "status": status}
+            )
+            for status in ("pending", "completed", "skipped", "failed")
+        }
+        status = "completed" if not counts["pending"] and not counts["failed"] else "incomplete"
+        report = {"run_id": run_id, "status": status, "types": run["types"], **counts}
+        report["selected"] = sum(counts.values())
+        if persist:
+            self.db.portal_reference_runs.update_one(
+                {"_id": run_id},
+                {"$set": {"status": status, "summary": report, "updated_at": now()}},
+            )
+        return report

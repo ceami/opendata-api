@@ -17,9 +17,10 @@ from .http import FetchError, PortalHTTP
 from .parse_pipeline import ParsePipeline
 from .parse_store import ParseStore
 from .pipeline import Pipeline
+from .reference_docs import REFERENCE_MAX_BYTES, REFERENCE_MAX_CHARS, ReferencePipeline
 from .snapshot import SNAPSHOT_MAX_BYTES, SnapshotPipeline, discover_snapshot_download
 from .sources import TYPES, CatalogSource
-from .store import MongoStore, SnapshotStore
+from .store import MongoStore, ReferenceStore, SnapshotStore
 
 
 def positive(value):
@@ -60,6 +61,18 @@ def parser():
     parse_command.add_argument("--types", choices=TYPES, nargs="+", default=list(TYPES))
     parse_command.add_argument("--limit", type=positive)
     parse_command.add_argument("--force", action="store_true")
+    references_command = commands.add_parser(
+        "references", help="Persist bounded text from official reference-document attachments"
+    )
+    references_command.add_argument("--types", choices=TYPES, nargs="+", default=["API"])
+    references_command.add_argument("--limit", type=positive)
+    references_command.add_argument("--interval", type=float, default=0.5)
+    references_command.add_argument("--retries", type=int, default=3)
+    references_command.add_argument("--timeout", type=positive, default=30)
+    references_command.add_argument("--max-bytes", type=positive, default=REFERENCE_MAX_BYTES)
+    references_command.add_argument("--max-chars", type=positive, default=REFERENCE_MAX_CHARS)
+    references_command.add_argument("--force", action="store_true")
+    references_command.add_argument("--resume", metavar="RUN_ID")
     snapshot_command = commands.add_parser(
         "snapshot", help="Persist the official monthly catalog CSV without live-catalog writes"
     )
@@ -152,6 +165,27 @@ def main(argv=None):
                 )
             print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
             return 0 if report["status"] == "completed" else 2
+        if args.command == "references":
+            client, mongo_store = _mongo()
+            with (
+                client,
+                PortalHTTP(
+                    interval=args.interval,
+                    retries=args.retries,
+                    timeout=args.timeout,
+                    max_bytes=args.max_bytes,
+                ) as http,
+            ):
+                report = ReferencePipeline(ReferenceStore(mongo_store.db), http).run(
+                    types=args.types,
+                    limit=args.limit,
+                    max_bytes=args.max_bytes,
+                    max_chars=args.max_chars,
+                    force=args.force,
+                    resume=args.resume,
+                )
+            print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
+            return 0 if report["status"] == "completed" else 2
         if args.command == "snapshot":
             if args.file:
                 file_path = Path(args.file)
@@ -196,7 +230,11 @@ def main(argv=None):
             print(json.dumps(report, ensure_ascii=False, default=str, indent=2))
             return 0 if report["status"] == "completed" else 2
     except (ValueError, FetchError, RuntimeError) as error:
-        operation = {"parse": "Parsing", "snapshot": "Snapshot"}.get(args.command, "Collection")
+        operation = {
+            "parse": "Parsing",
+            "snapshot": "Snapshot",
+            "references": "Reference collection",
+        }.get(args.command, "Collection")
         print(f"{operation} failed: {error}", file=sys.stderr)
         return 1
     except PyMongoError:

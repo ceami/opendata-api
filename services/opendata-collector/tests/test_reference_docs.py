@@ -1,17 +1,27 @@
+import gzip
+import hashlib
 import io
+import json
 import struct
 import zipfile
 import zlib
 
+import mongomock
+from mongomock.gridfs import enable_gridfs_integration
 from pypdf import filters
 
 import opendata_collector.reference_docs as reference_docs
+from opendata_collector.http import FetchError, Resource
 from opendata_collector.reference_docs import (
+    ReferencePipeline,
     extract_hwp_paragraph_stream,
     extract_reference_text,
     reference_attachment_identity,
     select_reference_attachments,
 )
+from opendata_collector.store import MongoStore, ReferenceStore
+
+enable_gridfs_integration()
 
 
 def attachment(name, **values):
@@ -25,6 +35,174 @@ def detail(*attachments):
         "hidden_fields": {"publicDataPk": "15129394", "publicDataDetailPk": "uddi:guide"},
         "attachments": list(attachments),
     }
+
+
+def reference_store_with_catalogs(*, api=True, file=True):
+    db = mongomock.MongoClient(tz_aware=True).reference_test
+    raw = MongoStore(db)
+    for kind, include in (("API", api), ("FILE", file)):
+        if not include:
+            continue
+        number = 15129394 if kind == "API" else 15129395
+        payload = detail(attachment(f"{kind} guide.docx"))
+        if kind == "FILE":
+            payload["hidden_fields"]["publicDataPk"] = str(number)
+        db.portal_catalog.insert_one(
+            {
+                "_id": f"{kind}:{number}",
+                "data_type": kind,
+                "list_id": number,
+                "is_active": True,
+                "detail_status": "completed",
+                "parsed_detail_ref": raw.save_raw(json.dumps(payload).encode()),
+            }
+        )
+    return ReferenceStore(db)
+
+
+class ReferenceHTTP:
+    def __init__(self, payload=b"document"):
+        self.payload = payload
+        self.calls = []
+        self.fail = set()
+
+    def get(self, url, *, kind):
+        self.calls.append((url, kind))
+        if url in self.fail:
+            raise FetchError("temporary attachment failure")
+        return Resource(url, self.payload, "application/octet-stream", None, kind)
+
+
+def test_reference_pipeline_selects_active_api_descriptors_and_persists_content_hashes(monkeypatch):
+    store = reference_store_with_catalogs()
+    http = ReferenceHTTP(b"source document")
+    monkeypatch.setattr(
+        reference_docs,
+        "extract_reference_text",
+        lambda payload, name, *, max_chars: {
+            "status": "EXTRACTED",
+            "text": "extracted text",
+            "char_count": 14,
+            "error": None,
+        },
+    )
+
+    report = ReferencePipeline(store, http).run(types=["API"], max_bytes=17, max_chars=100)
+
+    assert report["status"] == "completed"
+    assert report["selected"] == report["completed"] == 1
+    assert len(http.calls) == 1
+    resource = store.db.portal_resources.find_one({"kind": "reference_document"})
+    assert resource["catalog_id"] == "API:15129394"
+    assert resource["document_sha256"] == hashlib.sha256(b"source document").hexdigest()
+    assert resource["text_sha256"] == hashlib.sha256(b"extracted text").hexdigest()
+    assert gzip.decompress(store.raw.get(resource["raw_id"]).read()) == b"source document"
+    assert gzip.decompress(store.raw.get(resource["text_raw_id"]).read()) == b"extracted text"
+    assert resource["extraction_status"] == "EXTRACTED"
+    assert resource["char_count"] == 14
+
+
+def test_reference_pipeline_skips_completed_descriptors_resumes_failures_and_force_refreshes(
+    monkeypatch,
+):
+    store = reference_store_with_catalogs(file=False)
+    http = ReferenceHTTP()
+    monkeypatch.setattr(
+        reference_docs,
+        "extract_reference_text",
+        lambda payload, name, *, max_chars: {
+            "status": "EXTRACTED",
+            "text": "ok",
+            "char_count": 2,
+            "error": None,
+        },
+    )
+    first = ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=10)
+    second = ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=10)
+    forced = ReferencePipeline(store, http).run(
+        types=["API"], max_bytes=32, max_chars=10, force=True
+    )
+
+    assert first["completed"] == 1
+    assert second["skipped"] == 1
+    assert forced["completed"] == 1
+    assert len(http.calls) == 2
+
+    retry_store = reference_store_with_catalogs(file=False)
+    retry_http = ReferenceHTTP()
+    retry_http.fail.add(
+        "https://www.data.go.kr/cmm/cmm/fileDownload.do?atchFileId=FILE_000000000001&fileDetailSn=2&dataNm=API+guide.docx"
+    )
+    failed = ReferencePipeline(retry_store, retry_http).run(
+        types=["API"], max_bytes=32, max_chars=10
+    )
+    retry_http.fail.clear()
+    resumed = ReferencePipeline(retry_store, retry_http).run(
+        resume=failed["run_id"], max_bytes=32, max_chars=10
+    )
+
+    assert failed["status"] == "incomplete"
+    assert failed["failed"] == 1
+    assert resumed["status"] == "completed"
+    assert resumed["completed"] == 1
+    assert len(retry_http.calls) == 2
+
+
+def test_successful_reference_refresh_retires_only_its_previous_attachment_resource(monkeypatch):
+    store = reference_store_with_catalogs(file=False)
+    http = ReferenceHTTP(b"revision one")
+    monkeypatch.setattr(
+        reference_docs,
+        "extract_reference_text",
+        lambda payload, name, *, max_chars: {
+            "status": "EXTRACTED",
+            "text": payload.decode(),
+            "char_count": len(payload),
+            "error": None,
+        },
+    )
+    store.db.portal_resources.insert_one(
+        {"_id": "dcat", "catalog_id": "API:15129394", "kind": "dcat", "is_active": True}
+    )
+
+    ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=32)
+    http.payload = b"revision two"
+    ReferencePipeline(store, http).run(types=["API"], max_bytes=32, max_chars=32, force=True)
+
+    resources = list(
+        store.db.portal_resources.find(
+            {"catalog_id": "API:15129394", "kind": "reference_document"}
+        )
+    )
+    assert len(resources) == 2
+    assert len([value for value in resources if value["is_active"]]) == 1
+    assert store.db.portal_resources.find_one({"_id": "dcat"})["is_active"] is True
+
+
+def test_reference_pipeline_rejects_oversized_download_without_retiring_other_resources(
+    monkeypatch,
+):
+    store = reference_store_with_catalogs(file=False)
+    http = ReferenceHTTP(b"too large")
+    monkeypatch.setattr(
+        reference_docs,
+        "extract_reference_text",
+        lambda payload, name, *, max_chars: {
+            "status": "EXTRACTED",
+            "text": "ok",
+            "char_count": 2,
+            "error": None,
+        },
+    )
+    store.db.portal_resources.insert_one(
+        {"_id": "dcat", "catalog_id": "API:15129394", "kind": "dcat", "is_active": True}
+    )
+
+    report = ReferencePipeline(store, http).run(types=["API"], max_bytes=3, max_chars=10)
+
+    assert report["status"] == "incomplete"
+    assert report["failed"] == 1
+    assert store.db.portal_resources.find_one({"_id": "dcat"})["is_active"] is True
 
 
 def test_selects_registered_official_reference_attachment_and_builds_download_url():
@@ -195,8 +373,9 @@ def test_malformed_hwp_stream_returns_explicit_malformed_result():
     assert result["error"] == "Malformed HWP document"
 
 
-
-def _valid_docx(document=b'<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>'):
+def _valid_docx(
+    document=b'<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>text</w:t></w:r></w:p></w:body></w:document>',
+):
     return _zip(
         {
             "[Content_Types].xml": b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
@@ -207,26 +386,46 @@ def _valid_docx(document=b'<w:document xmlns:w="w"><w:body><w:p><w:r><w:t>text</
 
 
 def test_rejects_generic_zip_payloads_that_only_mimic_docx_or_hwpx_members():
-    assert extract_reference_text(
-        _zip({"word/document.xml": b"<document><p>not a DOCX package</p></document>"}),
-        "guide.docx", max_chars=100,
-    )["status"] == "MALFORMED"
-    assert extract_reference_text(
-        _zip({"Contents/section0.xml": b"<section><p>not a HWPX package</p></section>"}),
-        "guide.hwpx", max_chars=100,
-    )["status"] == "MALFORMED"
+    assert (
+        extract_reference_text(
+            _zip({"word/document.xml": b"<document><p>not a DOCX package</p></document>"}),
+            "guide.docx",
+            max_chars=100,
+        )["status"]
+        == "MALFORMED"
+    )
+    assert (
+        extract_reference_text(
+            _zip({"Contents/section0.xml": b"<section><p>not a HWPX package</p></section>"}),
+            "guide.hwpx",
+            max_chars=100,
+        )["status"]
+        == "MALFORMED"
+    )
 
 
 def test_rejects_non_positive_character_limits():
     for limit in (0, -1, True):
         result = extract_reference_text(_valid_docx(), "guide.docx", max_chars=limit)
-        assert result == {"status": "MALFORMED", "text": "", "char_count": 0, "error": "Invalid extraction limit"}
+        assert result == {
+            "status": "MALFORMED",
+            "text": "",
+            "char_count": 0,
+            "error": "Invalid extraction limit",
+        }
 
 
 def test_rejects_zip_member_limit_and_suspicious_compression_ratio(monkeypatch):
     monkeypatch.setattr(reference_docs, "MAX_ZIP_MEMBER_BYTES", 4)
-    result = extract_reference_text(_valid_docx(b"<document><p>large</p></document>"), "guide.docx", max_chars=100)
-    assert result == {"status": "MALFORMED", "text": "", "char_count": 0, "error": "Malformed DOCX archive"}
+    result = extract_reference_text(
+        _valid_docx(b"<document><p>large</p></document>"), "guide.docx", max_chars=100
+    )
+    assert result == {
+        "status": "MALFORMED",
+        "text": "",
+        "char_count": 0,
+        "error": "Malformed DOCX archive",
+    }
     monkeypatch.setattr(reference_docs, "MAX_ZIP_MEMBER_BYTES", 1024 * 1024)
     monkeypatch.setattr(reference_docs, "MAX_ZIP_COMPRESSION_RATIO", 1)
     result = extract_reference_text(_valid_docx(b"x" * 4096), "guide.docx", max_chars=100)
@@ -238,7 +437,9 @@ def test_pdf_stops_after_output_budget_and_rejects_excess_pages(monkeypatch):
     calls = []
 
     class Page:
-        def __init__(self, value): self.value = value
+        def __init__(self, value):
+            self.value = value
+
         def extract_text(self):
             calls.append(self.value)
             if self.value == "later":
@@ -248,7 +449,9 @@ def test_pdf_stops_after_output_budget_and_rejects_excess_pages(monkeypatch):
     class Reader:
         is_encrypted = False
         pages = [Page("one"), Page("later")]
-        def __init__(self, *_): pass
+
+        def __init__(self, *_):
+            pass
 
     monkeypatch.setattr(reference_docs, "PdfReader", Reader)
     assert extract_reference_text(b"small", "guide.pdf", max_chars=3)["status"] == "TRUNCATED"
@@ -264,12 +467,23 @@ class _Stream(io.BytesIO):
 
 
 class _FakeOle:
-    def __init__(self, streams): self.streams = streams
-    def __enter__(self): return self
-    def __exit__(self, *_): return None
-    def exists(self, name): return name in self.streams
-    def openstream(self, name): return _Stream(self.streams[name])
-    def listdir(self): return [name.split("/") for name in self.streams]
+    def __init__(self, streams):
+        self.streams = streams
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+    def exists(self, name):
+        return name in self.streams
+
+    def openstream(self, name):
+        return _Stream(self.streams[name])
+
+    def listdir(self):
+        return [name.split("/") for name in self.streams]
 
 
 def _hwp_header(*, compressed=False, encrypted=False, valid=True):
@@ -286,25 +500,49 @@ def _fake_hwp(monkeypatch, streams):
 def test_hwp_public_extraction_validates_signature_encryption_and_numeric_sections(monkeypatch):
     raw_two = _record(66) + _record(67, "two".encode("utf-16le"))
     raw_ten = _record(66) + _record(67, "ten".encode("utf-16le"))
-    _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(), "BodyText/Section10": raw_ten, "BodyText/Section2": raw_two})
+    _fake_hwp(
+        monkeypatch,
+        {"FileHeader": _hwp_header(), "BodyText/Section10": raw_ten, "BodyText/Section2": raw_two},
+    )
     result = extract_reference_text(b"ole", "guide.hwp", max_chars=100)
     assert result["text"] == "two\n\nten"
     _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(valid=False), "BodyText/Section0": raw_two})
-    assert extract_reference_text(b"ole", "guide.hwp", max_chars=100) == {"status": "MALFORMED", "text": "", "char_count": 0, "error": "Malformed HWP document"}
-    _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(encrypted=True), "BodyText/Section0": raw_two})
-    assert extract_reference_text(b"ole", "guide.hwp", max_chars=100) == {"status": "UNSUPPORTED", "text": "", "char_count": 0, "error": "Password-protected HWP document"}
+    assert extract_reference_text(b"ole", "guide.hwp", max_chars=100) == {
+        "status": "MALFORMED",
+        "text": "",
+        "char_count": 0,
+        "error": "Malformed HWP document",
+    }
+    _fake_hwp(
+        monkeypatch, {"FileHeader": _hwp_header(encrypted=True), "BodyText/Section0": raw_two}
+    )
+    assert extract_reference_text(b"ole", "guide.hwp", max_chars=100) == {
+        "status": "UNSUPPORTED",
+        "text": "",
+        "char_count": 0,
+        "error": "Password-protected HWP document",
+    }
 
 
-def test_hwp_public_extraction_supports_compressed_section_and_ignores_nonstandard_sections(monkeypatch):
+def test_hwp_public_extraction_supports_compressed_section_and_ignores_nonstandard_sections(
+    monkeypatch,
+):
     import zlib
+
     raw = _record(66) + _record(67, "compressed".encode("utf-16le"))
     compressor = zlib.compressobj(wbits=-15)
     packed = compressor.compress(raw) + compressor.flush()
-    _fake_hwp(monkeypatch, {"FileHeader": _hwp_header(compressed=True), "BodyText/Section0": packed, "BodyText/SectionNotes": raw})
+    _fake_hwp(
+        monkeypatch,
+        {
+            "FileHeader": _hwp_header(compressed=True),
+            "BodyText/Section0": packed,
+            "BodyText/SectionNotes": raw,
+        },
+    )
     result = extract_reference_text(b"ole", "guide.hwp", max_chars=100)
     assert result["status"] == "EXTRACTED"
     assert result["text"] == "compressed"
-
 
 
 def test_rejects_encrypted_zip_member_before_reading_it():
@@ -321,7 +559,6 @@ def test_rejects_encrypted_zip_member_before_reading_it():
         "char_count": 0,
         "error": "Malformed DOCX archive",
     }
-
 
 
 def _compressed_pdf(content):
@@ -373,13 +610,14 @@ def test_pdf_decode_policy_rejects_expansion_and_restores_pypdf_globals(monkeypa
     assert {name: getattr(filters, name) for name in names} == original
 
 
-
 def test_pdf_policy_is_active_during_reader_construction_and_content_resolution(monkeypatch):
     limit = 73
     observations = []
 
     def observe(stage):
-        observations.append((stage, {name: getattr(filters, name) for name in reference_docs.PDF_FILTER_LIMITS}))
+        observations.append(
+            (stage, {name: getattr(filters, name) for name in reference_docs.PDF_FILTER_LIMITS})
+        )
 
     class Page:
         def get(self, key):
@@ -404,5 +642,8 @@ def test_pdf_policy_is_active_during_reader_construction_and_content_resolution(
 
     assert extract_reference_text(b"small", "guide.pdf", max_chars=100)["text"] == "safe"
     assert [stage for stage, _ in observations] == ["reader", "contents", "text"]
-    assert all(values == {name: limit for name in reference_docs.PDF_FILTER_LIMITS} for _, values in observations)
+    assert all(
+        values == {name: limit for name in reference_docs.PDF_FILTER_LIMITS}
+        for _, values in observations
+    )
     assert {name: getattr(filters, name) for name in reference_docs.PDF_FILTER_LIMITS} == original

@@ -8,6 +8,7 @@ from mongomock.gridfs import enable_gridfs_integration
 from opendata_collector.parse_normalizers import PARSER_VERSION, normalize_catalog
 from opendata_collector.parse_pipeline import ParsePipeline
 from opendata_collector.parse_store import ParseStore
+from opendata_collector.reference_docs import reference_attachment_identity
 from opendata_collector.store import MongoStore, SnapshotStore
 
 enable_gridfs_integration()
@@ -498,3 +499,74 @@ def test_unchanged_partial_remains_incomplete_when_skipped(store):
     assert second["skipped"] == 1
     assert second["partial"] == 1
     assert second["status"] == "incomplete"
+
+
+def test_inputs_enrich_registered_attachments_with_active_reference_documents_and_fingerprint_them(
+    store,
+):
+    detail = {
+        "metadata": {},
+        "schema_org": [],
+        "api_specs": [],
+        "tables": [],
+        "detail_format": "TABLE",
+        "hidden_fields": {"publicDataPk": "7", "publicDataDetailPk": "uddi:guide"},
+        "attachments": [
+            {
+                "name": "API guide.docx",
+                "file_id": "FILE_000000000001",
+                "file_detail_sn": "2",
+            }
+        ],
+    }
+    catalog_id = seed(store, detail=detail)
+    store.db.portal_resources.insert_one(
+        {
+            "_id": "reference-resource",
+            "catalog_id": catalog_id,
+            "kind": "reference_document",
+            "attachment_id": reference_attachment_identity(
+                "API:7", "7", "uddi:guide", "FILE_000000000001", "2"
+            ),
+            "source": "official_attachment",
+            "name": "API guide.docx",
+            "format": "DOCX",
+            "file_id": "FILE_000000000001",
+            "file_detail_sn": "2",
+            "raw_id": "document-hash",
+            "document_sha256": "document-hash",
+            "text_raw_id": "text-hash",
+            "text_sha256": "text-hash",
+            "extraction_status": "EXTRACTED",
+            "extraction_error": None,
+            "char_count": 22,
+            "is_active": True,
+        }
+    )
+
+    parse_input = next(store.inputs(["API"]))
+    reference = parse_input.detail["attachments"][0]["reference_document"]
+
+    assert reference == {
+        "resource_id": "reference-resource",
+        "document_raw_id": "document-hash",
+        "document_sha256": "document-hash",
+        "text_raw_id": "text-hash",
+        "text_sha256": "text-hash",
+        "source": "official_attachment",
+        "name": "API guide.docx",
+        "format": "DOCX",
+        "extraction_status": "EXTRACTED",
+        "error": None,
+        "char_count": 22,
+    }
+    first_fingerprint = parse_input.source_fingerprint
+    store.db.portal_resources.update_one(
+        {"_id": "reference-resource"}, {"$set": {"text_sha256": "changed"}}
+    )
+    assert next(store.inputs(["API"])).source_fingerprint != first_fingerprint
+    output = ParsePipeline(store).run(["API"])
+    assert output["parsed"] == 1
+    assert store.db.parsed_api_info.find_one({"list_id": 7})["attachments"][0][
+        "reference_document"
+    ] == reference | {"text_sha256": "changed"}

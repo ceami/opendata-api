@@ -163,8 +163,11 @@ def _attachment_identifiers(item, detail, attachment):
 
 def reference_download_url(file_id, file_detail_sn, name):
     """Build the only official attachment download URL accepted by this collector."""
-    return BASE_URL + DOWNLOAD_PATH + "?" + urlencode(
-        {"atchFileId": file_id, "fileDetailSn": file_detail_sn, "dataNm": name}
+    return (
+        BASE_URL
+        + DOWNLOAD_PATH
+        + "?"
+        + urlencode({"atchFileId": file_id, "fileDetailSn": file_detail_sn, "dataNm": name})
     )
 
 
@@ -316,9 +319,7 @@ def _valid_docx(archive, consumed):
     required = {"[Content_Types].xml", "_rels/.rels", "word/document.xml"}
     if not required.issubset(names):
         _zip_error("DOCX")
-    content_types = _xml_root(
-        _zip_read(archive, "[Content_Types].xml", "DOCX", consumed), "DOCX"
-    )
+    content_types = _xml_root(_zip_read(archive, "[Content_Types].xml", "DOCX", consumed), "DOCX")
     relationships = _xml_root(_zip_read(archive, "_rels/.rels", "DOCX", consumed), "DOCX")
     if (
         _local_name(content_types.tag) != "Types"
@@ -355,9 +356,7 @@ def _valid_hwpx(archive, consumed):
     if _local_name(manifest.tag) != "manifest" or _local_name(container.tag) != "package":
         _zip_error("HWPX")
     section_names = (
-        name
-        for name in names
-        if re.fullmatch(r"Contents/section[0-9]+\.xml", name, re.IGNORECASE)
+        name for name in names if re.fullmatch(r"Contents/section[0-9]+\.xml", name, re.IGNORECASE)
     )
     sections = sorted(section_names, key=lambda name: int(re.search(r"[0-9]+", name).group()))
     if not sections:
@@ -570,18 +569,16 @@ def _hwp_stream_into(stream, compressed, accumulator):
         if compressed_size > MAX_HWP_STREAM_BYTES:
             raise _Malformed("Malformed HWP document")
         try:
-            output = decompressor.decompress(
-                chunk, MAX_HWP_DECOMPRESSED_BYTES - decompressed_size + 1
-            ) if decompressor else chunk
+            output = (
+                decompressor.decompress(chunk, MAX_HWP_DECOMPRESSED_BYTES - decompressed_size + 1)
+                if decompressor
+                else chunk
+            )
         except zlib.error:
             raise _Malformed("Malformed HWP document") from None
         decompressed_size += len(output)
-        if (
-            decompressed_size > MAX_HWP_DECOMPRESSED_BYTES
-            or (
-                compressed
-                and decompressed_size > max(1, compressed_size) * MAX_HWP_COMPRESSION_RATIO
-            )
+        if decompressed_size > MAX_HWP_DECOMPRESSED_BYTES or (
+            compressed and decompressed_size > max(1, compressed_size) * MAX_HWP_COMPRESSION_RATIO
         ):
             raise _Malformed("Malformed HWP document")
         if parser.feed(output):
@@ -702,6 +699,68 @@ def _pdf_into(payload, accumulator):
                     return
     except LimitReachedError:
         raise _Malformed("PDF page stream exceeds extraction limit") from None
+
+
+REFERENCE_MAX_BYTES = 32 * 1024 * 1024
+REFERENCE_MAX_CHARS = 1_000_000
+
+
+class ReferencePipeline:
+    """Download and extract official registered reference attachments independently."""
+
+    def __init__(self, store, http):
+        self.store = store
+        self.http = http
+
+    def run(
+        self,
+        *,
+        types=None,
+        limit=None,
+        max_bytes=REFERENCE_MAX_BYTES,
+        max_chars=REFERENCE_MAX_CHARS,
+        force=False,
+        resume=None,
+    ):
+        selected_types = list(dict.fromkeys(types or ["API"]))
+        if not selected_types or any(not isinstance(kind, str) for kind in selected_types):
+            raise ValueError("Invalid reference catalog types")
+        if limit is not None and (not isinstance(limit, int) or limit < 1):
+            raise ValueError("Reference limit must be positive")
+        if not isinstance(max_bytes, int) or max_bytes < 1:
+            raise ValueError("Reference byte limit must be positive")
+        if not isinstance(max_chars, int) or max_chars < 1:
+            raise ValueError("Reference character limit must be positive")
+        self.store.initialize()
+        if resume:
+            run = self.store.get_run(resume)
+            if run.get("status") == "completed":
+                raise ValueError("Completed reference run cannot be resumed")
+        else:
+            run = self.store.start_run(selected_types, max_bytes, max_chars, force)
+            selected = 0
+            for catalog, detail in self.store.catalogs(selected_types):
+                item = {**catalog, "catalog_id": catalog["_id"]}
+                for descriptor in select_reference_attachments(item, detail):
+                    if limit is not None and selected >= limit:
+                        break
+                    self.store.add_item(run["_id"], descriptor, force=force)
+                    selected += 1
+                if limit is not None and selected >= limit:
+                    break
+        for item in self.store.pending(run["_id"]):
+            descriptor = item["descriptor"]
+            try:
+                resource = self.http.get(descriptor["url"], kind="reference_document")
+                if len(resource.content) > max_bytes:
+                    raise ValueError("Reference download exceeds size limit")
+                extracted = extract_reference_text(
+                    resource.content, descriptor["name"], max_chars=max_chars
+                )
+                self.store.save_document(run["_id"], descriptor, resource, extracted)
+            except Exception as error:
+                self.store.fail_document(run["_id"], descriptor, error)
+        return self.store.report(run["_id"], persist=True)
 
 
 def extract_reference_text(payload, name, *, max_chars):

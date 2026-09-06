@@ -152,7 +152,9 @@ def test_snapshot_file_dispatches_without_http_or_service_key(monkeypatch, tmp_p
 
     monkeypatch.delenv("ODP_SERVICE_KEY", raising=False)
     monkeypatch.setattr("opendata_collector.cli._mongo", lambda: (Client(), mongo_store))
-    monkeypatch.setattr("opendata_collector.cli.SnapshotStore", lambda db: snapshot_store, raising=False)
+    monkeypatch.setattr(
+        "opendata_collector.cli.SnapshotStore", lambda db: snapshot_store, raising=False
+    )
     monkeypatch.setattr("opendata_collector.cli.SnapshotPipeline", PipelineStub, raising=False)
     monkeypatch.setattr(
         "opendata_collector.cli.PortalHTTP",
@@ -187,7 +189,10 @@ def test_snapshot_downloads_official_csv_with_configurable_byte_limit(monkeypatc
             return None
 
         def get(self, url, *, kind):
-            assert (url, kind) == ("https://www.data.go.kr/cmm/cmm/fileDownload.do?file=1", "snapshot_csv")
+            assert (url, kind) == (
+                "https://www.data.go.kr/cmm/cmm/fileDownload.do?file=1",
+                "snapshot_csv",
+            )
             return type("Resource", (), {"content": b"official csv"})()
 
     class PipelineStub:
@@ -200,12 +205,17 @@ def test_snapshot_downloads_official_csv_with_configurable_byte_limit(monkeypatc
 
     monkeypatch.delenv("ODP_SERVICE_KEY", raising=False)
     monkeypatch.setattr("opendata_collector.cli._mongo", lambda: (Client(), mongo_store))
-    monkeypatch.setattr("opendata_collector.cli.SnapshotStore", lambda db: snapshot_store, raising=False)
+    monkeypatch.setattr(
+        "opendata_collector.cli.SnapshotStore", lambda db: snapshot_store, raising=False
+    )
     monkeypatch.setattr("opendata_collector.cli.SnapshotPipeline", PipelineStub, raising=False)
     monkeypatch.setattr("opendata_collector.cli.PortalHTTP", HTTP)
     monkeypatch.setattr(
         "opendata_collector.cli.discover_snapshot_download",
-        lambda http: {"name": "official.csv", "url": "https://www.data.go.kr/cmm/cmm/fileDownload.do?file=1"},
+        lambda http: {
+            "name": "official.csv",
+            "url": "https://www.data.go.kr/cmm/cmm/fileDownload.do?file=1",
+        },
         raising=False,
     )
 
@@ -226,7 +236,9 @@ def test_snapshot_defaults_to_the_official_csv_size_limit():
     assert parser().parse_args(["snapshot"]).max_bytes == 268435456
 
 
-def test_snapshot_file_rejects_payload_larger_than_max_bytes_before_mongo(monkeypatch, tmp_path, capsys):
+def test_snapshot_file_rejects_payload_larger_than_max_bytes_before_mongo(
+    monkeypatch, tmp_path, capsys
+):
     source_file = tmp_path / "too-large.csv"
     source_file.write_bytes(b"1234")
     monkeypatch.setattr(
@@ -236,3 +248,55 @@ def test_snapshot_file_rejects_payload_larger_than_max_bytes_before_mongo(monkey
 
     assert main(["snapshot", "--file", str(source_file), "--max-bytes", "3"]) == 1
     assert "exceeds size limit" in capsys.readouterr().err
+
+
+def test_references_defaults_to_api_and_dispatches_isolated_pipeline(monkeypatch, capsys):
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    mongo_store = type("MongoStoreStub", (), {"db": object()})()
+    reference_store = object()
+    observed = {}
+
+    class HTTP:
+        def __init__(self, **kwargs):
+            observed["http"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    class PipelineStub:
+        def __init__(self, store, http):
+            assert store is reference_store
+            assert isinstance(http, HTTP)
+
+        def run(self, **kwargs):
+            observed["run"] = kwargs
+            return {"status": "completed", "completed": 1}
+
+    monkeypatch.setattr("opendata_collector.cli._mongo", lambda: (Client(), mongo_store))
+    monkeypatch.setattr("opendata_collector.cli.ReferenceStore", lambda db: reference_store)
+    monkeypatch.setattr("opendata_collector.cli.ReferencePipeline", PipelineStub)
+    monkeypatch.setattr("opendata_collector.cli.PortalHTTP", HTTP)
+
+    assert (
+        main(["references", "--limit", "2", "--max-bytes", "64", "--max-chars", "32", "--force"])
+        == 0
+    )
+    assert observed["http"]["max_bytes"] == 64
+    assert observed["run"] == {
+        "types": ["API"],
+        "limit": 2,
+        "max_bytes": 64,
+        "max_chars": 32,
+        "force": True,
+        "resume": None,
+    }
+    assert json.loads(capsys.readouterr().out)["completed"] == 1
