@@ -23,7 +23,18 @@ from models import (
     OpenFileInfo,
     SavedRequest,
 )
+from models.catalog import CollectedMetadata
 from utils.datetime_util import now_kst
+
+
+def collected_fields(document: Any | None) -> dict[str, Any]:
+    if document is None:
+        return {}
+    fields = CollectedMetadata.model_validate(
+        document, from_attributes=True
+    ).model_dump(exclude_none=True)
+    fields["data_format"] = getattr(document, "data_format", None)
+    return fields
 
 
 class DocumentsAppService:
@@ -87,6 +98,7 @@ class DocumentsAppService:
                 Eq(OpenAPIInfo.list_id, list_id)
             )
             return {
+                **collected_fields(open_api_info),
                 "list_id": api_document.list_id,
                 "data_type": "API",
                 "list_title": open_api_info.list_title
@@ -123,6 +135,7 @@ class DocumentsAppService:
                 Eq(OpenFileInfo.list_id, list_id)
             )
             return {
+                **collected_fields(open_file_info),
                 "list_id": file_document.list_id,
                 "data_type": "FILE",
                 "list_title": getattr(open_file_info, "list_title", None)
@@ -157,6 +170,7 @@ class DocumentsAppService:
         )
         if open_api_info:
             return {
+                **collected_fields(open_api_info),
                 "list_id": open_api_info.list_id,
                 "data_type": "API",
                 "list_title": open_api_info.list_title,
@@ -184,6 +198,7 @@ class DocumentsAppService:
         )
         if open_file_info:
             return {
+                **collected_fields(open_file_info),
                 "list_id": open_file_info.list_id,
                 "data_type": "FILE",
                 "list_title": getattr(open_file_info, "list_title", None)

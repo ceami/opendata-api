@@ -14,11 +14,19 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import AliasGenerator, BaseModel, ConfigDict, Field
+from pydantic import (
+    AliasGenerator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+)
 from pydantic.alias_generators import to_camel
 
+from models.catalog import CatalogType, CollectedMetadata
 
-class UnifiedDataItemDTO(BaseModel):
+
+class UnifiedDataItemDTO(CollectedMetadata):
     model_config = ConfigDict(
         extra="ignore",
         alias_generator=AliasGenerator(
@@ -34,7 +42,7 @@ class UnifiedDataItemDTO(BaseModel):
     description: str | None = None
     department: str | None = None
     category: str | None = None
-    data_type: str = "API"
+    data_type: CatalogType = "API"
     data_format: str | None = None
     pricing: Any | None = None
     copyright: Any | None = None
@@ -89,7 +97,7 @@ class RecommendationItemDTO(BaseModel):
     similarity_score: float | None = None
 
 
-class DocumentDetailDTO(BaseModel):
+class DocumentDetailDTO(CollectedMetadata):
     model_config = ConfigDict(
         extra="ignore",
         alias_generator=AliasGenerator(
@@ -100,7 +108,8 @@ class DocumentDetailDTO(BaseModel):
     )
 
     list_id: int
-    data_type: str
+    data_type: CatalogType
+    data_format: str | None = None
     list_title: str | None = None
     detail_url: str
     generated_status: bool
@@ -111,11 +120,16 @@ class DocumentDetailDTO(BaseModel):
     dept_nm: str | None = None
     is_charged: str | None = None
     share_scope_nm: str | None = None
-    keywords: list[str] = []
+    keywords: list[str] = Field(default_factory=list)
     token_count: int = 0
     generated_at: str | None = None
     markdown: str | None = None
-    recommendations: list[RecommendationItemDTO] = []
+    recommendations: list[RecommendationItemDTO] = Field(default_factory=list)
+
+    @field_validator("keywords", mode="before")
+    @classmethod
+    def empty_keywords(cls, value: Any) -> Any:
+        return [] if value is None else value
 
 
 class GeneratedDocumentDTO(BaseModel):

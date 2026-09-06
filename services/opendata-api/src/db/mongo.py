@@ -20,6 +20,7 @@ from models import (
     GeneratedFileDocs,
     OpenAPIInfo,
     OpenFileInfo,
+    PortalCatalog,
     RankLatest,
     RankMetadata,
     RankPopular,
@@ -41,6 +42,7 @@ class MongoDB:
             document_models=[
                 OpenAPIInfo,
                 OpenFileInfo,
+                PortalCatalog,
                 GeneratedFileDocs,
                 GeneratedAPIDocs,
                 RankLatest,

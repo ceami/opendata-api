@@ -11,8 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from .catalog import PortalCatalog
 from .open_data import (
     APIStdDocument,
+    DocRecommendation,
     GeneratedAPIDocs,
     GeneratedFileDocs,
     OpenAPIInfo,
@@ -20,14 +22,14 @@ from .open_data import (
     ParsedAPIInfo,
     ParsedFileInfo,
     RankLatest,
+    RankMetadata,
     RankPopular,
     RankTrending,
-    RankMetadata,
     SavedRequest,
-    DocRecommendation,
 )
 
 __all__ = [
+    "PortalCatalog",
     "APIStdDocument",
     "OpenAPIInfo",
     "ParsedAPIInfo",

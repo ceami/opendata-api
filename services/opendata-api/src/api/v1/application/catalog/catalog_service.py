@@ -133,7 +133,7 @@ class CatalogService:
         if not list_ids:
             return []
         file_docs = await OpenFileInfo.find(
-            {"list_id": {"$in": list_ids}}
+            {"list_id": {"$in": self._convert_to_int_list_ids(list_ids)}}
         ).to_list()
 
         file_data: list[UnifiedDataItem] = []
@@ -148,7 +148,7 @@ class CatalogService:
                 department=doc.org_nm or doc.dept_nm or "",
                 category=doc.new_category_nm or "",
                 data_type="FILE",
-                data_format=doc.data_type or "",
+                data_format=doc.data_format or "",
                 pricing=doc.is_charged,
                 copyright=doc.is_copyrighted,
                 third_party_copyright=(doc.is_third_party_copyrighted or ""),
@@ -302,7 +302,7 @@ class CatalogService:
 
         latest_sorted = sorted(
             rows,
-            key=lambda r: (r.get("created_at") or r.get("updated_at") or now),
+            key=lambda r: r.get("created_at") or r.get("updated_at") or now,
             reverse=True,
         )
         await self._bulk_upsert_rank(

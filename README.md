@@ -8,6 +8,26 @@
 
 내부적으로 검색/문서 도구는 `mcp.ezrnd.co.kr`(HTTPS) 백엔드를 사용합니다.
 
+## 공공데이터포털 수집·적재
+
+[opendata-collector](services/opendata-collector/README.md)는 data.go.kr의 FILE/API/STD/LINKED 공개 카탈로그, 상세 및 명세 메타데이터를 AI 처리 전에 MongoDB에 적재하는 독립 CLI입니다. 전체 순회, 원본 보존, 오류 기록, 중단 재개와 완료 검증을 지원합니다. 같은 `collect`를 새로 실행하면 기존 값을 upsert하고, 검증된 전체 스냅샷에서 사라진 항목은 비활성 이력으로 보존합니다. 수집 범위·실행 명령과 단위/통합 검증 결과는 해당 서비스 문서를 참고하세요.
+
+
+수집된 네 유형의 메타데이터는 기존 API 서버에서 조회할 수 있습니다.
+
+```text
+GET /api/v1/catalog
+GET /api/v1/catalog?data_type=STD&page=1&size=20&q=검색어
+GET /api/v1/catalog/{data_type}/{list_id}
+GET /api/v1/catalog/{data_type}/{list_id}/sources
+GET /api/v1/catalog/{data_type}/{list_id}/resources
+GET /api/v1/catalog/{data_type}/{list_id}/resources/{resource_id}/raw
+```
+
+목록 응답은 카탈로그 요약과 수집 상태를 반환하고, 상세 응답은 GridFS에 보관한 전체 파싱 결과를 복원합니다. `sources`에는 공급자의 원래 목록 레코드와 추가 필드가, `resources`에는 HTML·schema.org·DCAT·OpenAPI·이력 응답의 원문 참조가 들어 있습니다. `raw`는 브라우저가 HTML로 실행하지 않도록 바이너리 첨부파일로 반환합니다.
+
+새 카탈로그 문서는 `schema_version=2`와 별도 `data_format`을 사용합니다. 버전 필드가 없는 기존 카탈로그와 과거에 `open_file_info.data_type`에 `CSV` 같은 파일 포맷을 저장한 문서는 읽을 때 자동으로 호환하며 원본 DB 값은 변경하지 않습니다.
+
 ## 요구사항
 
 - Python 3.8+

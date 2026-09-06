@@ -19,6 +19,7 @@ from elasticsearch import Elasticsearch
 
 from core.settings import get_settings
 from models import OpenAPIInfo, OpenFileInfo
+from models.catalog import file_data_format
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -192,7 +193,9 @@ class TitleIndexer:
                 logger.warning(f"기존 인덱스 '{self.index_name}' 삭제 완료.")
 
             self.es.indices.create(index=self.index_name, **mapping)
-            logger.info(f"새로운 인덱스 '{self.index_name}' 및 튜닝된 분석기 생성 완료.")
+            logger.info(
+                f"새로운 인덱스 '{self.index_name}' 및 튜닝된 분석기 생성 완료."
+            )
         except Exception as e:
             logger.error(f"인덱스 생성 중 오류 발생: {e}")
             raise
@@ -200,6 +203,7 @@ class TitleIndexer:
     def index_documents(self, documents: list[dict[str, Any]]):
         try:
             from elasticsearch.helpers import bulk
+
             actions = []
             api_count = 0
             file_count = 0
@@ -230,17 +234,19 @@ class TitleIndexer:
                         "org_nm": doc.get("org_nm", ""),
                         "keywords": doc.get("keywords", []),
                         "desc": doc.get("desc", ""),
-                        "data_format": doc.get("data_type", ""),
+                        "data_format": file_data_format(doc) or "",
                         "api_type": "FILE",
                         "data_type": "FILE",
                     }
                     file_count += 1
 
-                actions.append({
-                    '_index': self.index_name,
-                    '_id': doc.get("list_id"),
-                    '_source': es_doc,
-                })
+                actions.append(
+                    {
+                        "_index": self.index_name,
+                        "_id": doc.get("list_id"),
+                        "_source": es_doc,
+                    }
+                )
 
             success, failed = bulk(self.es, actions)
 

@@ -19,6 +19,7 @@ from elasticsearch import Elasticsearch
 
 from core.settings import get_settings
 from models import OpenAPIInfo, OpenFileInfo
+from models.catalog import file_data_format
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -205,7 +206,7 @@ class TitleIndexer:
                         "org_nm": doc.get("org_nm", ""),
                         "keywords": doc.get("keywords", []),
                         "desc": doc.get("desc", ""),
-                        "data_format": doc.get("data_type", ""),
+                        "data_format": file_data_format(doc) or "",
                         "api_type": "FILE",
                         "data_type": "FILE",
                     }

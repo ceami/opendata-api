@@ -1,0 +1,20 @@
+# Core API runtime versions below match services/opendata-api/uv.lock.
+# Run with an isolated venv; no embedding/ML runtime is needed for these tests.
+beanie==2.0.0
+fastapi==0.116.1
+pymongo==4.14.1
+motor==3.7.1
+pydantic-settings[toml]==2.10.1
+elasticsearch==8.10.0
+slowapi==0.1.9
+loguru==0.7.3
+pytest>=8,<9
+pytest-asyncio>=1,<2
+httpx>=0.28,<1
+mongomock>=4.3,<5
+mongomock-motor>=0.0.36,<1
+beautifulsoup4>=4.13,<5
+ruff>=0.11
+pydantic==2.11.7
+starlette==0.47.3
+uvicorn==0.35.0

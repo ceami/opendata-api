@@ -21,6 +21,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from api import (
     admin_router,
+    catalog_router,
     docs_router,
     list_router,
     recommendation_router,
@@ -68,6 +69,7 @@ app.add_middleware(
     allow_headers=settings.cors_allow_headers,
 )
 
+app.include_router(catalog_router, prefix="/api/v1")
 app.include_router(list_router, prefix="/api/v1", tags=["document"])
 app.include_router(docs_router, prefix="/api/v1", tags=["document"])
 app.include_router(stats_router, prefix="/api/v1", tags=["document"])

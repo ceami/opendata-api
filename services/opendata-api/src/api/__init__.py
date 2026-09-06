@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from .v1.routers.catalog import catalog_router
 from .v1.routers.document_admin import admin_router
 from .v1.routers.document_docs import docs_router
 from .v1.routers.document_list import list_router
@@ -20,6 +21,7 @@ from .v1.routers.search_titles import search_titles_router
 from .v1.routers.search_titles_docs import search_titles_docs_router
 
 __all__ = [
+    "catalog_router",
     "list_router",
     "docs_router",
     "stats_router",

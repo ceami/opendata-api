@@ -16,7 +16,9 @@ from typing import Any, Literal
 
 import pymongo
 from beanie import Document
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from .catalog import CollectedMetadata, file_data_format
 
 
 class ParsedEndpoint(BaseModel):
@@ -29,7 +31,7 @@ class ParsedEndpoint(BaseModel):
     example_request_string: str | None = Field(default=None)
 
 
-class OpenFileInfo(Document):
+class OpenFileInfo(Document, CollectedMetadata):
     """OpenFileInfo 모델"""
 
     id: str = Field(default_factory=lambda: "")
@@ -37,7 +39,8 @@ class OpenFileInfo(Document):
     cost_unit: str | None
     created_at: datetime | None = None
     data_limit: str | None
-    data_type: str | None
+    data_type: Literal["FILE"] = "FILE"
+    data_format: str | None = None
     dept_nm: str | None
     desc: str | None
     download_cnt: int | None
@@ -69,6 +72,17 @@ class OpenFileInfo(Document):
     update_cycle: str | None
     updated_at: datetime | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_file_format(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {
+            **value,
+            "data_type": "FILE",
+            "data_format": file_data_format(value),
+        }
+
     class Settings:
         name = "open_file_info"
         indexes = [
@@ -91,10 +105,11 @@ class OpenFileInfo(Document):
         ]
 
 
-class OpenAPIInfo(Document):
+class OpenAPIInfo(Document, CollectedMetadata):
     """OpenAPIInfo 모델"""
 
     id: str = Field(default_factory=lambda: "")
+    data_type: Literal["API"] = "API"
     api_type: str
     category_nm: str
     core_data_nm: str | None
@@ -105,16 +120,16 @@ class OpenAPIInfo(Document):
     end_point_url: str
     guide_url: str | None
     is_charged: str
-    is_confirmed_for_dev: Literal["Y", "N"]
+    is_confirmed_for_dev: Literal["Y", "N"] | None
     is_confirmed_for_dev_nm: str
-    is_confirmed_for_prod: Literal["Y", "N"]
+    is_confirmed_for_prod: Literal["Y", "N"] | None
     is_confirmed_for_prod_nm: str
-    is_copyrighted: Literal["Y", "N"]
-    is_core_data: Literal["Y", "N"]
-    is_deleted: Literal["Y", "N"]
-    is_list_deleted: Literal["Y", "N"]
-    is_std_data: Literal["Y", "N"]
-    is_third_party_copyrighted: str
+    is_copyrighted: Literal["Y", "N"] | None
+    is_core_data: Literal["Y", "N"] | None
+    is_deleted: Literal["Y", "N"] | None
+    is_list_deleted: Literal["Y", "N"] | None
+    is_std_data: Literal["Y", "N"] | None
+    is_third_party_copyrighted: str | None
     keywords: list[str]
     link_url: str
     list_id: int
@@ -150,6 +165,13 @@ class OpenAPIInfo(Document):
     detail_format: Literal["LINK", "SWAGGER", "TABLE", "ERROR"] | None = None
     is_parsed: Literal["Y", "N", "ERROR"] = "N"
     parsed_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_api_kind(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {**value, "data_type": "API"}
 
     class Settings:
         name = "open_data_info"

@@ -20,6 +20,8 @@ from typing import Any
 class DataKind(str, Enum):
     API = "API"
     FILE = "FILE"
+    STD = "STD"
+    LINKED = "LINKED"
 
 
 def _coerce_int(value: Any, default: int = 0) -> int:
@@ -95,13 +97,7 @@ class UnifiedDataItem:
         self.created_at = _coerce_datetime(self.created_at)
         self.updated_at = _coerce_datetime(self.updated_at)
 
-        if isinstance(self.data_type, DataKind):
-            self.data_type = self.data_type.value
-        elif str(self.data_type) not in (
-            DataKind.API.value,
-            DataKind.FILE.value,
-        ):
-            self.data_type = DataKind.API.value
+        self.data_type = DataKind(self.data_type).value
 
 
 @dataclass(slots=True)
@@ -113,13 +109,7 @@ class GeneratedDocMeta:
     has_generated_doc: bool = False
 
     def __post_init__(self) -> None:
-        if isinstance(self.data_type, DataKind):
-            self.data_type = self.data_type.value
-        elif str(self.data_type) not in (
-            DataKind.API.value,
-            DataKind.FILE.value,
-        ):
-            self.data_type = DataKind.API.value
+        self.data_type = DataKind(self.data_type).value
         self.token_count = _coerce_int(self.token_count, default=0)
         self.generated_at = _coerce_datetime(self.generated_at)
 
@@ -139,13 +129,7 @@ class RankedItem:
     rank: int | None = None
 
     def __post_init__(self) -> None:
-        if isinstance(self.data_type, DataKind):
-            self.data_type = self.data_type.value
-        elif str(self.data_type) not in (
-            DataKind.API.value,
-            DataKind.FILE.value,
-        ):
-            self.data_type = DataKind.API.value
+        self.data_type = DataKind(self.data_type).value
         self.token_count = _coerce_int(self.token_count, default=0)
         self.popularity_score = _coerce_int(self.popularity_score, default=0)
         self.rank = (
