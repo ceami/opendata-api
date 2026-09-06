@@ -398,6 +398,7 @@ def test_completion_of_one_run_document_is_the_visibility_gate(snapshot_pipeline
         {
             "_id": f"{running_id}:FILE:2",
             "run_id": running_id,
+            "snapshot_run_id": running_id,
             "catalog_id": "FILE:2",
             "data_type": "FILE",
             "list_id": 2,
@@ -433,3 +434,158 @@ def test_failed_generation_does_not_attempt_rollback_compensation(snapshot_pipel
     failed = snapshot_pipeline.store.db.portal_snapshot_runs.find_one()
     assert calls == []
     assert failed["status"] == "failed"
+
+
+def test_initialize_migrates_completed_legacy_rows_and_only_drops_legacy_unique_index():
+    database = mongomock.MongoClient(tz_aware=True).snapshot_migration
+    records = database.portal_snapshot_records
+    records.create_index([("data_type", 1), ("list_id", 1)], unique=True, name="legacy_identity")
+    records.create_index([("legacy_other", 1), ("run_id", 1)], unique=True, name="preserve_other_unique")
+    run_id = "legacy-completed"
+    database.portal_snapshot_runs.insert_one(
+        {
+            "_id": run_id,
+            "status": "completed",
+            "record_count": 1,
+            "started_at": store_module.now(),
+            "summary": {"run_id": run_id, "status": "completed"},
+        }
+    )
+    records.insert_one(
+        {
+            "_id": "FILE:1",
+            "catalog_id": "FILE:1",
+            "data_type": "FILE",
+            "list_id": 1,
+            "title": "Legacy",
+            "source_hash": "legacy-source",
+            "legacy_other": "preserve",
+            "published_run": run_id,
+            "last_seen_run": run_id,
+        }
+    )
+
+    store = store_module.SnapshotStore(database)
+    store.initialize()
+    store.initialize()
+
+    names = {index["name"] for index in records.list_indexes()}
+    current = list(store.current_records())
+    assert "legacy_identity" not in names
+    assert "preserve_other_unique" in names
+    assert "run_id_1_catalog_id_1" in names
+    assert records.find_one({"_id": "FILE:1"}) is None
+    assert current[0]["_id"] == f"{run_id}:FILE:1"
+    assert current[0]["run_id"] == run_id
+    assert database.portal_snapshot_runs.find_one({"_id": run_id})["completed_at"] is not None
+
+
+def test_initialize_can_resume_after_copying_a_legacy_row_before_its_delete(monkeypatch):
+    database = mongomock.MongoClient(tz_aware=True).snapshot_migration_interrupt
+    run_id = "legacy-completed"
+    database.portal_snapshot_runs.insert_one(
+        {
+            "_id": run_id,
+            "status": "completed",
+            "record_count": 1,
+            "started_at": store_module.now(),
+            "summary": {"run_id": run_id, "status": "completed"},
+        }
+    )
+    records = database.portal_snapshot_records
+    records.insert_one(
+        {
+            "_id": "FILE:1",
+            "catalog_id": "FILE:1",
+            "data_type": "FILE",
+            "list_id": 1,
+            "last_seen_run": run_id,
+        }
+    )
+    store = store_module.SnapshotStore(database)
+    original_delete = records.delete_one
+
+    monkeypatch.setattr(
+        records,
+        "delete_one",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("delete interrupted")),
+    )
+    with pytest.raises(RuntimeError, match="delete interrupted"):
+        store.initialize()
+    assert records.find_one({"_id": f"{run_id}:FILE:1"}) is not None
+    assert records.find_one({"_id": "FILE:1"}) is not None
+
+    monkeypatch.setattr(records, "delete_one", original_delete)
+    store.initialize()
+    assert records.find_one({"_id": "FILE:1"}) is None
+    assert records.count_documents({"run_id": run_id}) == 1
+
+
+def test_initialize_leaves_running_and_failed_legacy_rows_unpublished():
+    database = mongomock.MongoClient(tz_aware=True).snapshot_migration_unpublished
+    records = database.portal_snapshot_records
+    database.portal_snapshot_runs.insert_many(
+        [
+            {"_id": "running", "status": "running", "record_count": 1},
+            {"_id": "failed", "status": "failed", "record_count": 1},
+        ]
+    )
+    records.insert_many(
+        [
+            {"_id": "FILE:1", "catalog_id": "FILE:1", "last_seen_run": "running"},
+            {"_id": "FILE:2", "catalog_id": "FILE:2", "published_run": "failed"},
+        ]
+    )
+
+    store = store_module.SnapshotStore(database)
+    store.initialize()
+
+    assert list(store.current_records()) == []
+    assert records.count_documents({"run_id": {"$exists": True}}) == 0
+    assert records.count_documents({"_id": {"$in": ["FILE:1", "FILE:2"]}}) == 2
+
+
+def test_duplicate_raw_replay_repairs_a_completed_generation_missing_rows(snapshot_pipeline):
+    payload = snapshot_payload(snapshot_row(1), snapshot_row(2))
+    first = snapshot_pipeline.run(payload, source={"kind": "file"})
+    snapshot_pipeline.store.db.portal_snapshot_records.delete_one(
+        {"_id": f"{first['run_id']}:FILE:2"}
+    )
+
+    repaired = snapshot_pipeline.run(payload, source={"kind": "file"})
+
+    current = list(snapshot_pipeline.store.current_records())
+    assert repaired["run_id"] != first["run_id"]
+    assert snapshot_pipeline.store.db.portal_snapshot_runs.count_documents({"status": "completed"}) == 2
+    assert {record["catalog_id"] for record in current} == {"FILE:1", "FILE:2"}
+    assert {record["run_id"] for record in current} == {repaired["run_id"]}
+
+
+def test_initialize_backfills_snapshot_run_marker_on_existing_generation_rows():
+    database = mongomock.MongoClient(tz_aware=True).snapshot_generation_backfill
+    run_id = "already-generated"
+    database.portal_snapshot_runs.insert_one(
+        {
+            "_id": run_id,
+            "status": "completed",
+            "record_count": 1,
+            "started_at": store_module.now(),
+            "completed_at": store_module.now(),
+            "summary": {"run_id": run_id, "status": "completed"},
+        }
+    )
+    database.portal_snapshot_records.insert_one(
+        {
+            "_id": f"{run_id}:FILE:1",
+            "run_id": run_id,
+            "catalog_id": "FILE:1",
+            "data_type": "FILE",
+            "list_id": 1,
+        }
+    )
+
+    store = store_module.SnapshotStore(database)
+    store.initialize()
+
+    current = list(store.current_records())
+    assert current[0]["snapshot_run_id"] == run_id

@@ -422,12 +422,72 @@ class SnapshotStore:
         self.owner = None
 
     def initialize(self):
+        self._drop_legacy_identity_index()
+        self._migrate_legacy_records()
         self.db.portal_snapshot_records.create_index(
             [("run_id", 1), ("catalog_id", 1)], unique=True
         )
         self.db.portal_snapshot_records.create_index([("run_id", 1), ("data_type", 1)])
         self.db.portal_snapshot_runs.create_index([("status", 1), ("completed_at", -1)])
         self.db.portal_snapshot_runs.create_index("raw_sha256")
+
+    def _drop_legacy_identity_index(self):
+        legacy_keys = (("data_type", 1), ("list_id", 1))
+        for index in list(self.db.portal_snapshot_records.list_indexes()):
+            key_items = tuple(index["key"].items())
+            if index.get("unique") and key_items == legacy_keys:
+                self.db.portal_snapshot_records.drop_index(index["name"])
+
+    def _migrate_legacy_records(self):
+        legacy_rows = self.db.portal_snapshot_records.find(
+            {"snapshot_run_id": {"$exists": False}}
+        )
+        for legacy in legacy_rows:
+            if legacy.get("run_id"):
+                self.db.portal_snapshot_records.update_one(
+                    {"_id": legacy["_id"], "snapshot_run_id": {"$exists": False}},
+                    {"$set": {"snapshot_run_id": legacy["run_id"]}},
+                )
+                continue
+            run_id = legacy.get("published_run") or legacy.get("last_seen_run")
+            if not run_id:
+                continue
+            run = self.db.portal_snapshot_runs.find_one({"_id": run_id, "status": "completed"})
+            if run is None:
+                continue
+            if "completed_at" not in run:
+                completed_at = run.get("updated_at") or run.get("started_at") or now()
+                self.db.portal_snapshot_runs.update_one(
+                    {"_id": run_id, "completed_at": {"$exists": False}},
+                    {"$set": {"completed_at": completed_at, "updated_at": now()}},
+                )
+            catalog_id = legacy.get("catalog_id", legacy["_id"])
+            migrated = dict(legacy)
+            migrated["_id"] = f"{run_id}:{catalog_id}"
+            migrated["run_id"] = run_id
+            migrated["snapshot_run_id"] = run_id
+            migrated["catalog_id"] = catalog_id
+            migrated["migrated_at"] = now()
+            for field in (
+                "snapshot_run_id",
+                "published_run",
+                "last_seen_run",
+                "last_seen_at",
+                "is_active",
+                "removed_at",
+                "removed_by_run",
+            ):
+                migrated.pop(field, None)
+            self.db.portal_snapshot_records.update_one(
+                {"_id": migrated["_id"]}, {"$setOnInsert": migrated}, upsert=True
+            )
+            # The copy is durable before a rerun can remove the legacy row.
+            self.db.portal_snapshot_records.delete_one(
+                {
+                    "_id": legacy["_id"],
+                    "snapshot_run_id": {"$exists": False},
+                }
+            )
 
     def acquire(self, owner):
         instant = now()
@@ -497,9 +557,19 @@ class SnapshotStore:
         run = self.latest_completed_run()
         if run is None:
             return []
-        return self.db.portal_snapshot_records.find({"run_id": run["_id"]}).sort(
+        return self.db.portal_snapshot_records.find({"snapshot_run_id": run["_id"]}).sort(
             [("data_type", 1), ("list_id", 1)]
         )
+
+    def _generation_matches(self, run, rows):
+        expected = {row["catalog_id"] for row in rows}
+        actual = {
+            record["catalog_id"]
+            for record in self.db.portal_snapshot_records.find(
+                {"snapshot_run_id": run["_id"]}, {"catalog_id": 1}
+            )
+        }
+        return len(actual) == len(rows) and actual == expected
 
     def _assert_complete_enough(self, rows):
         previous = self.latest_completed_run()
@@ -547,6 +617,7 @@ class SnapshotStore:
                 selector = {"_id": f"{run_id}:{row['catalog_id']}"}
                 fields = {
                     "run_id": run_id,
+                    "snapshot_run_id": run_id,
                     "catalog_id": row["catalog_id"],
                     "data_type": row["data_type"],
                     "list_id": row["list_id"],
@@ -592,7 +663,7 @@ class SnapshotStore:
                 {"raw_sha256": raw_sha256, "status": "completed"},
                 sort=[("completed_at", -1), ("_id", -1)],
             )
-            if existing is not None:
+            if existing is not None and self._generation_matches(existing, rows):
                 return existing["summary"]
             self._assert_complete_enough(rows)
             raw_id = self.save_raw(raw_content)
@@ -634,7 +705,7 @@ class SnapshotStore:
             self.release(owner)
 
     def reconciliation(self, run_id):
-        candidate = {"run_id": run_id}
+        candidate = {"snapshot_run_id": run_id}
         active_current = {
             "is_active": {"$ne": False},
             "data_type": {"$in": self.SUPPORTED_TYPES},

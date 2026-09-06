@@ -214,3 +214,42 @@ def test_real_mongo_snapshot_uses_bulk_current_row_upserts(real_store):
     assert {row["run_id"] for row in current} == {second["run_id"]}
     assert real_store.db.portal_snapshot_records.count_documents({}) == 4
     assert real_store.db.portal_raw.files.count_documents({}) == 2
+
+
+def test_real_mongo_migrates_completed_legacy_snapshot_rows(real_store):
+    db = real_store.db
+    records = db.portal_snapshot_records
+    records.create_index(
+        [("data_type", 1), ("list_id", 1)], unique=True, name="legacy_identity"
+    )
+    db.portal_snapshot_runs.insert_one(
+        {
+            "_id": "legacy-run",
+            "status": "completed",
+            "record_count": 1,
+            "started_at": NOW,
+            "summary": {"run_id": "legacy-run", "status": "completed"},
+        }
+    )
+    records.insert_one(
+        {
+            "_id": "FILE:1",
+            "catalog_id": "FILE:1",
+            "data_type": "FILE",
+            "list_id": 1,
+            "title": "Legacy file",
+            "published_run": "legacy-run",
+            "last_seen_run": "legacy-run",
+        }
+    )
+
+    store = SnapshotStore(db)
+    store.initialize()
+
+    current = list(store.current_records())
+    names = {index["name"] for index in records.list_indexes()}
+    assert "legacy_identity" not in names
+    assert "run_id_1_catalog_id_1" in names
+    assert current[0]["_id"] == "legacy-run:FILE:1"
+    assert current[0]["snapshot_run_id"] == "legacy-run"
+    assert db.portal_snapshot_runs.find_one({"_id": "legacy-run"})["completed_at"] == NOW
