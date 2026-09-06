@@ -249,6 +249,9 @@ class MongoStore:
         )
         return repeated
 
+    def needs_selection(self, run_id):
+        return not self.get_run(run_id).get("selection_complete") or self.db.portal_reference_run_items.count_documents({"run_id": run_id, "item_type": "catalog", "status": "failed"}) > 0
+
     def pending(self, run_id):
         return self.db.portal_run_items.find({"run_id": run_id, "status": {"$ne": "completed"}})
 
@@ -870,6 +873,9 @@ class ReferenceStore:
             {"$set": {"status": "skipped", "errors": [], "updated_at": now()}},
         )
 
+    def needs_selection(self, run_id):
+        return not self.get_run(run_id).get("selection_complete") or self.db.portal_reference_run_items.count_documents({"run_id": run_id, "item_type": "catalog", "status": "failed"}) > 0
+
     def pending(self, run_id):
         return self.db.portal_reference_run_items.find(
             {"run_id": run_id, "item_type": "document", "status": {"$in": ["pending", "failed"]}}
@@ -884,7 +890,7 @@ class ReferenceStore:
             }
         )
         if not catalog or not catalog.get("parsed_detail_ref"):
-            return None
+            return None, None
         try:
             detail = self.load_detail(catalog["parsed_detail_ref"])
         except (
@@ -896,7 +902,7 @@ class ReferenceStore:
             EOFError,
             ValueError,
         ):
-            return None
+            return None, "Cannot load collected detail payload"
         from .reference_docs import select_reference_attachments
 
         item = {**catalog, "catalog_id": catalog["_id"]}
@@ -907,7 +913,7 @@ class ReferenceStore:
                 if value["attachment_id"] == descriptor["attachment_id"]
             ),
             None,
-        )
+        ), None
 
     def stale_document(self, run_id, descriptor):
         self.db.portal_reference_run_items.update_one(
@@ -919,7 +925,15 @@ class ReferenceStore:
         raw_id = self.save_raw(resource.content)
         text_raw_id = self.save_raw(extracted["text"].encode("utf-8"))
         resource_id = digest(
-            "\n".join((descriptor["catalog_id"], descriptor["attachment_id"], raw_id))
+            "\n".join(
+                (
+                    descriptor["catalog_id"],
+                    descriptor["attachment_id"],
+                    raw_id,
+                    text_raw_id,
+                    extracted["status"],
+                )
+            )
         )
         terminal = extracted["status"] in self.SUCCESS_STATUSES
         collected_at = now()

@@ -745,14 +745,13 @@ class ReferencePipeline:
             run["max_chars"],
             run["force"],
         )
-        if not run.get("selection_complete"):
+        if self.store.needs_selection(run["_id"]):
             selected = 0
             selection_ok = True
             try:
                 for catalog, detail, error in self.store.catalogs(selected_types):
                     if error:
                         self.store.catalog_error(run["_id"], catalog["_id"], error)
-                        selection_ok = False
                         continue
                     self.store.catalog_loaded(run["_id"], catalog["_id"])
                     item = {**catalog, "catalog_id": catalog["_id"]}
@@ -769,7 +768,10 @@ class ReferencePipeline:
             run = self.store.get_run(run["_id"])
         if run.get("selection_complete"):
             for item in self.store.pending(run["_id"]):
-                descriptor = self.store.current_descriptor(item["descriptor"])
+                descriptor, lookup_error = self.store.current_descriptor(item["descriptor"])
+                if lookup_error:
+                    self.store.fail_document(run["_id"], item["descriptor"], lookup_error)
+                    continue
                 if descriptor is None:
                     self.store.stale_document(run["_id"], item["descriptor"])
                     continue
