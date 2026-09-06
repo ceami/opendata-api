@@ -10,7 +10,7 @@ from xml.etree import ElementTree
 
 from .parsers import parse_dcat_metadata
 
-PARSER_VERSION = "2"
+PARSER_VERSION = "3"
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put", "trace"}
 
 
@@ -159,13 +159,62 @@ def _metadata_value(metadata: dict[str, Any], *labels: str) -> Any:
 def _official_record(source_records: list[dict[str, Any]]) -> dict[str, Any]:
     merged: dict[str, Any] = {}
     for stored in source_records:
-        record = stored.get("record", stored)
+        record = _source_record(stored)
         if not isinstance(record, dict):
             continue
         for key, value in record.items():
             if key not in merged and _nonempty(value):
                 merged[key] = value
     return merged
+
+
+MONTHLY_SOURCE_FIELDS = {
+    "id": ("목록키",),
+    "title": ("목록명",),
+    "list_title": ("목록명",),
+    "meta_url": ("목록 URL",),
+    "org_nm": ("제공기관", "제공 기관", "제공기관명"),
+    "dept_nm": ("관리부서명", "관리부서", "담당부서"),
+    "category_nm": ("분류체계", "카테고리", "카테고리명"),
+    "data_format": ("확장자", "데이터포맷", "데이터 형식", "파일형식"),
+    "created_at": ("등록일", "생성일"),
+    "updated_at": ("수정일", "최종수정일", "갱신일"),
+    "published_at": ("공개일", "게시일"),
+    "share_scope_nm": ("이용허락범위", "이용 허락 범위", "라이선스"),
+    "download_cnt": ("다운로드수",),
+    "view_count": ("조회수", "열람수"),
+    "provision_type": ("제공유형", "서비스유형"),
+    "is_standard_data": ("표준데이터 여부", "표준데이터여부"),
+    "spatial_coverage": ("공간범위",),
+    "temporal_coverage": ("시간범위",),
+    "end_point_url": ("서비스URL", "서비스 URL", "API URL"),
+}
+
+
+def _monthly_record(stored: dict[str, Any]) -> dict[str, Any]:
+    record = stored.get("record", stored)
+    if not isinstance(record, dict):
+        return {}
+    result = dict(record)
+    for output_field, labels in MONTHLY_SOURCE_FIELDS.items():
+        if _nonempty(result.get(output_field)):
+            continue
+        result[output_field] = _first(*(record.get(label) for label in labels), default="")
+    return result
+
+
+def _source_record(stored: dict[str, Any]) -> dict[str, Any]:
+    if stored.get("source") == "monthly_snapshot":
+        return _monthly_record(stored)
+    record = stored.get("record", stored)
+    return record if isinstance(record, dict) else {}
+
+
+def _monthly_snapshot(source_records: list[dict[str, Any]]) -> dict[str, Any]:
+    for stored in reversed(source_records):
+        if stored.get("source") == "monthly_snapshot":
+            return stored
+    return {}
 
 
 def _schema_documents(detail: dict[str, Any]) -> list[dict[str, Any]]:
@@ -610,6 +659,7 @@ def _contact(
 def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     catalog, detail = parse_input.catalog, parse_input.detail
     source = _official_record(parse_input.source_records)
+    snapshot = _monthly_snapshot(parse_input.source_records)
     metadata = detail.get("metadata", {})
     if not isinstance(metadata, dict):
         metadata = {}
@@ -722,10 +772,14 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         ),
         "notes": _first(source.get("etc"), _metadata_value(metadata, "기타 유의사항", "유의사항")),
         "spatial_coverage": _first(
-            schema.get("spatialCoverage"), _metadata_value(metadata, "공간범위")
+            schema.get("spatialCoverage"),
+            _metadata_value(metadata, "공간범위"),
+            source.get("spatial_coverage"),
         ),
         "temporal_coverage": _first(
-            schema.get("temporalCoverage"), _metadata_value(metadata, "시간범위")
+            schema.get("temporalCoverage"),
+            _metadata_value(metadata, "시간범위"),
+            source.get("temporal_coverage"),
         ),
         "pricing_basis": _first(
             source.get("cost_unit"),
@@ -749,9 +803,18 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         "request_cnt": _integer(
             _first(source.get("request_cnt"), source.get("download_cnt"), default=0)
         ),
+        "view_count": _integer(_first(source.get("view_count"), default=0)),
+        "provision_type": _first(source.get("provision_type"), default=""),
+        "is_standard_data": _first(
+            source.get("is_standard_data"), source.get("is_std_data"), default=None
+        ),
         "title_en": _first(source.get("title_en"), default=""),
         "register_status": _first(source.get("register_status"), default=""),
         "use_prmisn_ennc": _first(source.get("use_prmisn_ennc"), default=""),
+        "monthly_snapshot": dict(snapshot.get("record", {})),
+        "snapshot_run_id": snapshot.get("snapshot_run_id"),
+        "snapshot_source": snapshot.get("snapshot_source"),
+        "snapshot_raw_sha256": snapshot.get("snapshot_raw_sha256"),
         "metadata": dict(metadata),
         "schema_org": dict(schema),
         "schema_org_raw": _schema_documents(detail),
@@ -925,7 +988,7 @@ def _operation_endpoints(detail: dict[str, Any], list_id: int) -> list[dict[str,
 def _source_endpoints(source_records: list[dict[str, Any]], list_id: int) -> list[dict[str, Any]]:
     endpoints = []
     for index, stored in enumerate(source_records, 1):
-        record = stored.get("record", stored)
+        record = _source_record(stored)
         if not isinstance(record, dict):
             continue
         path = _first(
@@ -1153,7 +1216,7 @@ def _api_context(
             security_schemes.setdefault(name, value)
     service_urls: list[Any] = []
     for stored in source_records:
-        record = stored.get("record", stored)
+        record = _source_record(stored)
         if not isinstance(record, dict):
             continue
         service_urls.extend(

@@ -221,6 +221,10 @@ class ParsedMetadata(BaseModel):
     parser_version: str | None = None
     parse_status: Literal["completed", "partial", "failed"] | None = None
     parse_errors: list[dict[str, Any]] = Field(default_factory=list)
+    monthly_snapshot: dict[str, Any] = Field(default_factory=dict)
+    snapshot_run_id: str | None = None
+    snapshot_source: Any | None = None
+    snapshot_raw_sha256: str | None = None
     source_url: str = ""
     published_at: datetime | None = None
     organization: str = ""
@@ -238,6 +242,9 @@ class ParsedMetadata(BaseModel):
     pricing_basis: str = ""
     contact: dict[str, Any] = Field(default_factory=dict)
     is_core_data: Any | None = None
+    view_count: int = 0
+    provision_type: str = ""
+    is_standard_data: Any | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     schema_org: dict[str, Any] = Field(default_factory=dict)
     schema_org_raw: list[dict[str, Any]] = Field(default_factory=list)

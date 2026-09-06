@@ -1122,3 +1122,70 @@ def test_invalid_linked_dcat_is_explicit_partial_error():
             "error": "Cannot parse DCAT resource",
         }
     ]
+
+
+
+def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance():
+    detail = {
+        "metadata": {"공간범위": ["detail spatial"]},
+        "schema_org": [{"@type": "Dataset", "temporalCoverage": "detail temporal"}],
+        "api_specs": [],
+        "attachments": [],
+        "tables": [],
+        "detail_format": "TABLE",
+    }
+    monthly_row = {
+        "목록키": "7",
+        "목록명": "Monthly title",
+        "목록 URL": "https://monthly.example.test/7",
+        "제공기관": "Monthly organization",
+        "관리부서명": "Monthly department",
+        "분류체계": "Monthly category",
+        "확장자": "CSV",
+        "등록일": "2025-01-02",
+        "수정일": "2025-02-03",
+        "이용허락범위": "Monthly license",
+        "조회수": "1,234",
+        "다운로드수": "56",
+        "제공유형": "FILE",
+        "표준데이터 여부": "Y",
+        "공간범위": "monthly spatial",
+        "시간범위": "monthly temporal",
+        "서비스URL": "https://monthly.example.test/api",
+    }
+    output = normalize_catalog(
+        parse_input(
+            "API",
+            detail,
+            sources=[
+                {"record": {"title": "Live title", "org_nm": "Live organization"}},
+                {
+                    "source": "monthly_snapshot",
+                    "record": monthly_row,
+                    "snapshot_run_id": "snapshot-run",
+                    "snapshot_source": {"name": "monthly.csv"},
+                    "snapshot_raw_sha256": "snapshot-hash",
+                },
+            ],
+        )
+    )
+
+    assert output.document["title"] == "Live title"
+    assert output.document["organization"] == "Live organization"
+    assert output.document["department"] == "Monthly department"
+    assert output.document["category"] == "Monthly category"
+    assert output.document["data_format"] == "CSV"
+    assert output.document["created_at"] == datetime(2025, 1, 2, tzinfo=timezone.utc)
+    assert output.document["update_at"] == datetime(2025, 2, 3, tzinfo=timezone.utc)
+    assert output.document["license"] == "Monthly license"
+    assert output.document["request_cnt"] == 56
+    assert output.document["view_count"] == 1234
+    assert output.document["provision_type"] == "FILE"
+    assert output.document["is_standard_data"] == "Y"
+    assert output.document["spatial_coverage"] == "detail spatial"
+    assert output.document["temporal_coverage"] == "detail temporal"
+    assert output.document["service_urls"] == ["https://monthly.example.test/api"]
+    assert output.document["monthly_snapshot"] == monthly_row
+    assert output.document["snapshot_run_id"] == "snapshot-run"
+    assert output.document["snapshot_source"] == {"name": "monthly.csv"}
+    assert output.document["snapshot_raw_sha256"] == "snapshot-hash"

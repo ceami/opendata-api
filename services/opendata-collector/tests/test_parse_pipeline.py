@@ -85,6 +85,65 @@ def test_inputs_load_gridfs_payloads_and_fingerprint_source_changes(store):
     assert changed.source_fingerprint != first.source_fingerprint
 
 
+def test_inputs_use_latest_completed_snapshot_as_a_low_priority_source(store):
+    catalog_id = seed(store, "FILE")
+    store.db.portal_snapshot_runs.insert_many(
+        [
+            {
+                "_id": "completed",
+                "status": "completed",
+                "completed_at": NOW,
+                "source": {"name": "monthly.csv"},
+                "raw_sha256": "completed-hash",
+            },
+            {
+                "_id": "running",
+                "status": "running",
+                "completed_at": NOW + timedelta(days=1),
+                "source": {"name": "unpublished.csv"},
+                "raw_sha256": "running-hash",
+            },
+        ]
+    )
+    store.db.portal_snapshot_records.insert_many(
+        [
+            {
+                "_id": "completed:FILE:7",
+                "snapshot_run_id": "completed",
+                "catalog_id": catalog_id,
+                "data_type": "FILE",
+                "list_id": 7,
+                "source_record": {"목록명": "Monthly title", "제공기관": "Monthly org"},
+            },
+            {
+                "_id": "running:FILE:7",
+                "snapshot_run_id": "running",
+                "catalog_id": catalog_id,
+                "data_type": "FILE",
+                "list_id": 7,
+                "source_record": {"목록명": "Unpublished title"},
+            },
+        ]
+    )
+
+    first = next(store.inputs(["FILE"]))
+
+    snapshot = first.source_records[-1]
+    assert snapshot["source"] == "monthly_snapshot"
+    assert snapshot["record"] == {"목록명": "Monthly title", "제공기관": "Monthly org"}
+    assert snapshot["snapshot_run_id"] == "completed"
+    assert snapshot["snapshot_source"] == {"name": "monthly.csv"}
+    assert snapshot["snapshot_raw_sha256"] == "completed-hash"
+    assert first.source_records[0]["record"]["title"] == "Official 7"
+
+    store.db.portal_snapshot_records.update_one(
+        {"_id": "completed:FILE:7"}, {"$set": {"source_record.제공기관": "Changed org"}}
+    )
+    changed = next(store.inputs(["FILE"]))
+
+    assert changed.source_fingerprint != first.source_fingerprint
+
+
 def test_pipeline_skips_unchanged_reparses_changed_and_supports_force(store):
     catalog_id = seed(store)
     pipeline = ParsePipeline(store)

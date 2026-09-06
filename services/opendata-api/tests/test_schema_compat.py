@@ -292,3 +292,41 @@ def test_file_and_catalog_models_preserve_parse_status():
     assert catalog_value["parse_status"] == "partial"
     assert catalog_value["parse_errors"] == [{"kind": "dcat"}]
     assert catalog_value["parser_version"] == "1"
+
+
+
+def test_parsed_api_model_serializes_monthly_snapshot_provenance_and_flags():
+    output = normalize_catalog(
+        ParseInput(
+            catalog={
+                "_id": "API:7",
+                "data_type": "API",
+                "list_id": 7,
+                "title": "public",
+                "summary": {},
+                "detail_url": "https://www.data.go.kr/data/7/detail.do",
+                "detail_status": "completed",
+                "detail_errors": [],
+            },
+            detail={"metadata": {}, "schema_org": [], "api_specs": [], "attachments": [], "tables": []},
+            source_records=[
+                {
+                    "source": "monthly_snapshot",
+                    "record": {"목록명": "monthly", "조회수": "9", "제공유형": "FILE"},
+                    "snapshot_run_id": "snapshot-run",
+                    "snapshot_source": {"name": "monthly.csv"},
+                    "snapshot_raw_sha256": "snapshot-hash",
+                }
+            ],
+            source_fingerprint="fingerprint",
+        )
+    )
+
+    document = ParsedAPIInfo.model_validate(output.document).model_dump(mode="json")
+
+    assert document["monthly_snapshot"] == {"목록명": "monthly", "조회수": "9", "제공유형": "FILE"}
+    assert document["snapshot_run_id"] == "snapshot-run"
+    assert document["snapshot_source"] == {"name": "monthly.csv"}
+    assert document["snapshot_raw_sha256"] == "snapshot-hash"
+    assert document["view_count"] == 9
+    assert document["provision_type"] == "FILE"

@@ -64,6 +64,9 @@ def source_fingerprint(
                 "source": value.get("source"),
                 "data_type": value.get("data_type"),
                 "record": value.get("record", {}),
+                "snapshot_run_id": value.get("snapshot_run_id"),
+                "snapshot_source": value.get("snapshot_source"),
+                "snapshot_raw_sha256": value.get("snapshot_raw_sha256"),
             }
             for value in source_records
         ],
@@ -114,6 +117,9 @@ class ParseStore:
         cursor = self.db.portal_catalog.find(query).sort([("data_type", 1), ("list_id", 1)])
         if limit is not None:
             cursor = cursor.limit(limit)
+        snapshot_run = self.db.portal_snapshot_runs.find_one(
+            {"status": "completed"}, sort=[("completed_at", -1), ("_id", -1)]
+        )
         for catalog in cursor:
             source_records = list(
                 self.db.portal_source_records.find(
@@ -125,6 +131,23 @@ class ParseStore:
                     {"catalog_id": catalog["_id"], "is_active": {"$ne": False}}
                 ).sort("_id", 1)
             )
+            if snapshot_run is not None:
+                snapshot = self.db.portal_snapshot_records.find_one(
+                    {"snapshot_run_id": snapshot_run["_id"], "catalog_id": catalog["_id"]}
+                )
+                raw_record = snapshot.get("source_record") if snapshot else None
+                if isinstance(raw_record, dict):
+                    source_records.append(
+                        {
+                            "_id": snapshot.get("_id"),
+                            "source": "monthly_snapshot",
+                            "data_type": snapshot.get("data_type"),
+                            "record": dict(raw_record),
+                            "snapshot_run_id": snapshot_run["_id"],
+                            "snapshot_source": snapshot_run.get("source"),
+                            "snapshot_raw_sha256": snapshot_run.get("raw_sha256"),
+                        }
+                    )
             errors = []
             detail: dict[str, Any] = {}
             detail_ref = catalog.get("parsed_detail_ref")
