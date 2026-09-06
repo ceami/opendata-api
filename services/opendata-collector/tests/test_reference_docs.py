@@ -371,3 +371,38 @@ def test_pdf_decode_policy_rejects_expansion_and_restores_pypdf_globals(monkeypa
         "error": "PDF page stream exceeds extraction limit",
     }
     assert {name: getattr(filters, name) for name in names} == original
+
+
+
+def test_pdf_policy_is_active_during_reader_construction_and_content_resolution(monkeypatch):
+    limit = 73
+    observations = []
+
+    def observe(stage):
+        observations.append((stage, {name: getattr(filters, name) for name in reference_docs.PDF_FILTER_LIMITS}))
+
+    class Page:
+        def get(self, key):
+            assert key == "/Contents"
+            observe("contents")
+            return None
+
+        def extract_text(self):
+            observe("text")
+            return "safe"
+
+    class Reader:
+        is_encrypted = False
+        pages = [Page()]
+
+        def __init__(self, *_):
+            observe("reader")
+
+    original = {name: getattr(filters, name) for name in reference_docs.PDF_FILTER_LIMITS}
+    monkeypatch.setattr(reference_docs, "MAX_PDF_PAGE_STREAM_BYTES", limit)
+    monkeypatch.setattr(reference_docs, "PdfReader", Reader)
+
+    assert extract_reference_text(b"small", "guide.pdf", max_chars=100)["text"] == "safe"
+    assert [stage for stage, _ in observations] == ["reader", "contents", "text"]
+    assert all(values == {name: limit for name in reference_docs.PDF_FILTER_LIMITS} for _, values in observations)
+    assert {name: getattr(filters, name) for name in reference_docs.PDF_FILTER_LIMITS} == original

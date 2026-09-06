@@ -688,21 +688,20 @@ def _pdf_stream_size(stream):
 
 
 def _pdf_into(payload, accumulator):
-    reader = PdfReader(io.BytesIO(payload))
-    if reader.is_encrypted:
-        raise _Unsupported("Password-protected PDF document")
-    for number, page in enumerate(reader.pages, 1):
-        if number > MAX_PDF_PAGES:
-            raise _Malformed("Malformed PDF document")
-        for stream in _pdf_streams(page):
-            _pdf_stream_size(stream)
-        try:
-            with _pypdf_page_limits(MAX_PDF_PAGE_STREAM_BYTES):
-                text = page.extract_text() or ""
-        except LimitReachedError:
-            raise _Malformed("PDF page stream exceeds extraction limit") from None
-        if accumulator.add(text):
-            return
+    try:
+        with _pypdf_page_limits(MAX_PDF_PAGE_STREAM_BYTES):
+            reader = PdfReader(io.BytesIO(payload))
+            if reader.is_encrypted:
+                raise _Unsupported("Password-protected PDF document")
+            for number, page in enumerate(reader.pages, 1):
+                if number > MAX_PDF_PAGES:
+                    raise _Malformed("Malformed PDF document")
+                for stream in _pdf_streams(page):
+                    _pdf_stream_size(stream)
+                if accumulator.add(page.extract_text() or ""):
+                    return
+    except LimitReachedError:
+        raise _Malformed("PDF page stream exceeds extraction limit") from None
 
 
 def extract_reference_text(payload, name, *, max_chars):
