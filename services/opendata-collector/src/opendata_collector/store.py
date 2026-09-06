@@ -408,7 +408,7 @@ class MongoStore:
 
 
 class SnapshotStore:
-    """Persist validated monthly CSV rows without changing live catalog authority."""
+    """Persist immutable snapshot generations without changing live catalog authority."""
 
     SUPPORTED_TYPES = ("API", "FILE", "STD")
     MIN_COMPLETENESS_RATIO = 0.8
@@ -423,10 +423,10 @@ class SnapshotStore:
 
     def initialize(self):
         self.db.portal_snapshot_records.create_index(
-            [("data_type", 1), ("list_id", 1)], unique=True
+            [("run_id", 1), ("catalog_id", 1)], unique=True
         )
-        self.db.portal_snapshot_records.create_index([("is_active", 1), ("last_seen_run", 1)])
-        self.db.portal_snapshot_runs.create_index("started_at")
+        self.db.portal_snapshot_records.create_index([("run_id", 1), ("data_type", 1)])
+        self.db.portal_snapshot_runs.create_index([("status", 1), ("completed_at", -1)])
         self.db.portal_snapshot_runs.create_index("raw_sha256")
 
     def acquire(self, owner):
@@ -488,14 +488,26 @@ class SnapshotStore:
         for start in range(0, len(values), size):
             yield values[start : start + size]
 
-    def _assert_complete_enough(self, rows):
-        previous_count = self.db.portal_snapshot_records.count_documents(
-            {"is_active": {"$ne": False}}
+    def latest_completed_run(self):
+        return self.db.portal_snapshot_runs.find_one(
+            {"status": "completed"}, sort=[("completed_at", -1), ("_id", -1)]
         )
+
+    def current_records(self):
+        run = self.latest_completed_run()
+        if run is None:
+            return []
+        return self.db.portal_snapshot_records.find({"run_id": run["_id"]}).sort(
+            [("data_type", 1), ("list_id", 1)]
+        )
+
+    def _assert_complete_enough(self, rows):
+        previous = self.latest_completed_run()
+        previous_count = previous["record_count"] if previous else 0
         minimum = (previous_count * 4 + 4) // 5
         if previous_count and len(rows) < minimum:
             raise ValueError(
-                "Snapshot is too incomplete to retire current rows "
+                "Snapshot is too incomplete to replace current generation "
                 f"({len(rows)} of {previous_count})"
             )
 
@@ -527,12 +539,14 @@ class SnapshotStore:
                 self.db.portal_snapshot_records.update_one(selector, update, upsert=True)
 
     def _save_rows(self, rows, run_id, raw_id, raw_sha256):
-        seen_at = now()
+        staged_at = now()
         for batch in self._batches(rows, self.batch_size):
             self.heartbeat()
             operations, updates = [], []
             for row in batch:
+                selector = {"_id": f"{run_id}:{row['catalog_id']}"}
                 fields = {
+                    "run_id": run_id,
                     "catalog_id": row["catalog_id"],
                     "data_type": row["data_type"],
                     "list_id": row["list_id"],
@@ -544,14 +558,9 @@ class SnapshotStore:
                     "detail_hash": hashlib.sha256(row["detail_url"].encode()).hexdigest(),
                     "raw_id": raw_id,
                     "raw_sha256": raw_sha256,
-                    "last_seen_run": run_id,
-                    "last_seen_at": seen_at,
+                    "staged_at": staged_at,
                 }
-                selector = {"_id": row["catalog_id"]}
-                update = {
-                    "$set": fields,
-                    "$setOnInsert": {"first_seen_at": seen_at, "is_active": False},
-                }
+                update = {"$setOnInsert": fields}
                 updates.append((selector, update))
                 operations.append(UpdateOne(selector, update, upsert=True))
             if operations:
@@ -559,19 +568,8 @@ class SnapshotStore:
 
     def _fail_run(self, run, error):
         if run is not None:
-            # Roll back a retirement that reached Mongo before its acknowledgement was lost.
-            try:
-                self.db.portal_snapshot_records.update_many(
-                    {"removed_by_run": run["_id"]},
-                    {
-                        "$set": {"is_active": True},
-                        "$unset": {"removed_at": "", "removed_by_run": ""},
-                    },
-                )
-            except Exception:
-                pass
             self.db.portal_snapshot_runs.update_one(
-                {"_id": run["_id"], "status": {"$ne": "completed"}},
+                {"_id": run["_id"], "status": "running"},
                 {
                     "$set": {
                         "status": "failed",
@@ -583,14 +581,20 @@ class SnapshotStore:
             )
 
     def persist(self, rows, *, source, raw_content):
-        """Publish validated rows in batches, then retire rows absent from this snapshot."""
+        """Stage an immutable generation; one completed run document publishes it."""
         self.initialize()
         owner = str(uuid.uuid4())
         self.acquire(owner)
         run = None
         try:
-            self._assert_complete_enough(rows)
             raw_sha256 = hashlib.sha256(raw_content).hexdigest()
+            existing = self.db.portal_snapshot_runs.find_one(
+                {"raw_sha256": raw_sha256, "status": "completed"},
+                sort=[("completed_at", -1), ("_id", -1)],
+            )
+            if existing is not None:
+                return existing["summary"]
+            self._assert_complete_enough(rows)
             raw_id = self.save_raw(raw_content)
             run = self.start_run(
                 source=source,
@@ -599,25 +603,7 @@ class SnapshotStore:
                 record_count=len(rows),
             )
             self._save_rows(rows, run["_id"], raw_id, raw_sha256)
-            # Newly inserted rows remain inactive until every batch has been persisted.
-            retired = self.db.portal_snapshot_records.update_many(
-                {"last_seen_run": {"$ne": run["_id"]}, "is_active": {"$ne": False}},
-                {
-                    "$set": {
-                        "is_active": False,
-                        "removed_at": now(),
-                        "removed_by_run": run["_id"],
-                    }
-                },
-            ).modified_count
-            self.db.portal_snapshot_records.update_many(
-                {"last_seen_run": run["_id"]},
-                {
-                    "$set": {"is_active": True, "published_run": run["_id"]},
-                    "$unset": {"removed_at": "", "removed_by_run": ""},
-                },
-            )
-            reconciliation = self.reconciliation()
+            reconciliation = self.reconciliation(run["_id"])
             report = {
                 "run_id": run["_id"],
                 "status": "completed",
@@ -625,18 +611,21 @@ class SnapshotStore:
                 "raw_id": raw_id,
                 "raw_sha256": raw_sha256,
                 "record_count": len(rows),
-                "retired_count": retired,
                 "reconciliation": reconciliation,
             }
-            self.db.portal_snapshot_runs.update_one(
-                {"_id": run["_id"]},
-                {"$set": {"status": "completed", "summary": report, "updated_at": now()}},
+            result = self.db.portal_snapshot_runs.update_one(
+                {"_id": run["_id"], "status": "running"},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "summary": report,
+                        "completed_at": now(),
+                        "updated_at": now(),
+                    }
+                },
             )
-            self.db.portal_snapshot_state.update_one(
-                {"_id": "current"},
-                {"$set": {"active_run_id": run["_id"], "updated_at": now()}},
-                upsert=True,
-            )
+            if result.matched_count != 1:
+                raise RuntimeError("Snapshot run cannot be published")
             return report
         except Exception as error:
             self._fail_run(run, error)
@@ -644,18 +633,18 @@ class SnapshotStore:
         finally:
             self.release(owner)
 
-    def reconciliation(self):
-        active_snapshot = {"is_active": {"$ne": False}}
+    def reconciliation(self, run_id):
+        candidate = {"run_id": run_id}
         active_current = {
             "is_active": {"$ne": False},
             "data_type": {"$in": self.SUPPORTED_TYPES},
         }
-        snapshot_count = self.db.portal_snapshot_records.count_documents(active_snapshot)
+        snapshot_count = self.db.portal_snapshot_records.count_documents(candidate)
         current_count = self.db.portal_catalog.count_documents(active_current)
         matched = 0
         identifiers = []
-        for record in self.db.portal_snapshot_records.find(active_snapshot, {"_id": 1}):
-            identifiers.append(record["_id"])
+        for record in self.db.portal_snapshot_records.find(candidate, {"catalog_id": 1}):
+            identifiers.append(record["catalog_id"])
             if len(identifiers) == self.batch_size:
                 matched += self.db.portal_catalog.count_documents(
                     {"_id": {"$in": identifiers}, **active_current}

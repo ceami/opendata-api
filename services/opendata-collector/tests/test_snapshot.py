@@ -249,34 +249,34 @@ def test_discover_snapshot_download_rejects_mismatched_or_malformed_descriptor_f
             discover_snapshot_download(client)
 
 
-def test_snapshot_deduplicates_unchanged_raw_csv_and_replaces_latest_row_fields(snapshot_pipeline):
-    first = snapshot_pipeline.run(
+def test_snapshot_generations_deduplicate_raw_and_keep_latest_completed_rows(snapshot_pipeline):
+    snapshot_pipeline.run(
         snapshot_payload(snapshot_row(1, title="Original")),
         source={"kind": "file", "name": "monthly.csv"},
     )
-    before = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:1"})
+    before = list(snapshot_pipeline.store.current_records())[0]
     second = snapshot_pipeline.run(
         snapshot_payload(snapshot_row(1, title="Renamed")),
         source={"kind": "file", "name": "monthly.csv"},
     )
-
-    third = snapshot_pipeline.run(
+    repeated = snapshot_pipeline.run(
         snapshot_payload(snapshot_row(1, title="Renamed")),
         source={"kind": "file", "name": "monthly.csv"},
     )
 
-    records = list(snapshot_pipeline.store.db.portal_snapshot_records.find())
-    current = records[0]
+    current = list(snapshot_pipeline.store.current_records())
     assert snapshot_pipeline.store.db.portal_raw.files.count_documents({}) == 2
-    assert len(records) == 1
-    assert current["title"] == "Renamed"
-    assert current["source_hash"] != before["source_hash"]
-    assert current["last_seen_run"] == third["run_id"]
-    assert first["raw_id"] != second["raw_id"] == third["raw_id"]
+    assert snapshot_pipeline.store.db.portal_snapshot_runs.count_documents({"status": "completed"}) == 2
+    assert snapshot_pipeline.store.db.portal_snapshot_records.count_documents({}) == 2
+    assert current[0]["run_id"] == second["run_id"] == repeated["run_id"]
+    assert current[0]["title"] == "Renamed"
+    assert current[0]["source_hash"] != before["source_hash"]
 
 
-def test_snapshot_rejects_invalid_payload_before_retiring_current_rows(snapshot_pipeline):
-    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
+def test_invalid_snapshot_does_not_change_completed_generation(snapshot_pipeline):
+    first = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"}
+    )
 
     with pytest.raises(ValueError, match="unsupported catalog type"):
         snapshot_pipeline.run(
@@ -284,26 +284,29 @@ def test_snapshot_rejects_invalid_payload_before_retiring_current_rows(snapshot_
             source={"kind": "file"},
         )
 
-    records = list(snapshot_pipeline.store.db.portal_snapshot_records.find({"is_active": True}))
-    assert {record["_id"] for record in records} == {"FILE:1", "FILE:2"}
+    current = list(snapshot_pipeline.store.current_records())
+    assert {record["catalog_id"] for record in current} == {"FILE:1", "FILE:2"}
+    assert {record["run_id"] for record in current} == {first["run_id"]}
 
 
-def test_snapshot_retires_unseen_rows_only_after_a_complete_valid_snapshot(snapshot_pipeline):
-    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
-
-    report = snapshot_pipeline.run(
+def test_completed_generation_replaces_membership_without_deleting_history(snapshot_pipeline):
+    first = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"}
+    )
+    second = snapshot_pipeline.run(
         snapshot_payload(snapshot_row(1), snapshot_row(3)), source={"kind": "file"}
     )
 
-    current = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:1"})
-    retired = snapshot_pipeline.store.db.portal_snapshot_records.find_one({"_id": "FILE:2"})
-    assert report["status"] == "completed"
-    assert current["is_active"] is True
-    assert retired["is_active"] is False
-    assert retired["removed_at"] is not None
+    current = list(snapshot_pipeline.store.current_records())
+    historical = list(snapshot_pipeline.store.db.portal_snapshot_records.find())
+    assert second["status"] == "completed"
+    assert {record["catalog_id"] for record in current} == {"FILE:1", "FILE:3"}
+    assert {record["run_id"] for record in current} == {second["run_id"]}
+    assert {record["run_id"] for record in historical} == {first["run_id"], second["run_id"]}
+    assert len(historical) == 4
 
 
-def test_snapshot_report_reconciles_snapshot_and_authoritative_current_records(snapshot_pipeline):
+def test_snapshot_report_reconciles_candidate_generation_and_excludes_linked(snapshot_pipeline):
     catalog = snapshot_pipeline.store.db.portal_catalog
     catalog.insert_many(
         [
@@ -330,7 +333,7 @@ def test_parse_snapshot_csv_rejects_header_only_snapshot():
         parse_snapshot_csv(HEADERS.encode())
 
 
-def test_snapshot_rejects_valid_prefix_that_is_too_small_to_retire_current_rows(snapshot_pipeline):
+def test_snapshot_rejects_valid_prefix_that_is_too_small_to_replace_current_generation(snapshot_pipeline):
     snapshot_pipeline.run(
         snapshot_payload(*(snapshot_row(number) for number in range(1, 6))), source={"kind": "file"}
     )
@@ -338,8 +341,8 @@ def test_snapshot_rejects_valid_prefix_that_is_too_small_to_retire_current_rows(
     with pytest.raises(ValueError, match="too incomplete"):
         snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
 
-    active = list(snapshot_pipeline.store.db.portal_snapshot_records.find({"is_active": True}))
-    assert {record["_id"] for record in active} == {f"FILE:{number}" for number in range(1, 6)}
+    current = list(snapshot_pipeline.store.current_records())
+    assert {record["catalog_id"] for record in current} == {f"FILE:{number}" for number in range(1, 6)}
 
 
 def test_snapshot_store_serializes_publication_with_a_dedicated_lease(snapshot_pipeline):
@@ -354,44 +357,79 @@ def test_snapshot_store_serializes_publication_with_a_dedicated_lease(snapshot_p
         first.release("first")
 
 
-def test_failed_snapshot_run_is_finalized_without_retiring_current_rows(snapshot_pipeline, monkeypatch):
-    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
+def test_failed_later_generation_is_invisible_and_marks_its_run_failed(snapshot_pipeline, monkeypatch):
+    first = snapshot_pipeline.run(
+        snapshot_payload(snapshot_row(1, title="Original"), snapshot_row(2)), source={"kind": "file"}
+    )
     collection = snapshot_pipeline.store.db.portal_snapshot_records
+    original = collection.update_one
+    writes = 0
 
-    def fail_bulk_write(*_, **__):
-        raise RuntimeError("simulated bulk failure")
+    def fail_second_staged_write(*args, **kwargs):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise RuntimeError("simulated staged bulk failure")
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(collection, "bulk_write", fail_bulk_write)
-    with pytest.raises(RuntimeError, match="simulated bulk failure"):
-        snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(3)), source={"kind": "file"})
+    monkeypatch.setattr(collection, "update_one", fail_second_staged_write)
+    with pytest.raises(RuntimeError, match="staged bulk failure"):
+        snapshot_pipeline.run(
+            snapshot_payload(snapshot_row(1, title="Uncommitted"), snapshot_row(3)),
+            source={"kind": "file"},
+        )
 
     failed = snapshot_pipeline.store.db.portal_snapshot_runs.find_one(sort=[("started_at", -1)])
-    active = list(collection.find({"is_active": True}))
+    current = list(snapshot_pipeline.store.current_records())
     assert failed["status"] == "failed"
-    assert {record["_id"] for record in active} == {"FILE:1", "FILE:2"}
+    assert {record["catalog_id"] for record in current} == {"FILE:1", "FILE:2"}
+    assert current[0]["title"] == "Original"
+    assert {record["run_id"] for record in current} == {first["run_id"]}
+    assert collection.count_documents({"run_id": failed["_id"]}) == 1
 
 
-def test_failed_retirement_rolls_back_rows_marked_by_the_failed_run(snapshot_pipeline, monkeypatch):
-    snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(2)), source={"kind": "file"})
+def test_completion_of_one_run_document_is_the_visibility_gate(snapshot_pipeline):
+    first = snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
+    running_id = "staged-only"
+    snapshot_pipeline.store.db.portal_snapshot_runs.insert_one(
+        {"_id": running_id, "status": "running", "started_at": first["run_id"]}
+    )
+    snapshot_pipeline.store.db.portal_snapshot_records.insert_one(
+        {
+            "_id": f"{running_id}:FILE:2",
+            "run_id": running_id,
+            "catalog_id": "FILE:2",
+            "data_type": "FILE",
+            "list_id": 2,
+            "title": "Staged only",
+        }
+    )
+
+    assert {record["catalog_id"] for record in snapshot_pipeline.store.current_records()} == {"FILE:1"}
+
+    snapshot_pipeline.store.db.portal_snapshot_runs.update_one(
+        {"_id": running_id}, {"$set": {"status": "completed", "completed_at": store_module.now()}}
+    )
+    assert {record["catalog_id"] for record in snapshot_pipeline.store.current_records()} == {"FILE:2"}
+
+
+def test_failed_generation_does_not_attempt_rollback_compensation(snapshot_pipeline, monkeypatch):
     collection = snapshot_pipeline.store.db.portal_snapshot_records
-    original = collection.update_many
+    calls = []
 
-    def retire_then_fail(selector, update, **kwargs):
-        if selector.get("last_seen_run", {}).get("$ne"):
-            original(selector, update, **kwargs)
-            raise RuntimeError("simulated retirement acknowledgement loss")
-        return original(selector, update, **kwargs)
+    def unexpected_update_many(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("rollback compensation must not run")
 
-    monkeypatch.setattr(collection, "update_many", retire_then_fail)
-    with pytest.raises(RuntimeError, match="retirement acknowledgement loss"):
-        snapshot_pipeline.run(snapshot_payload(snapshot_row(1), snapshot_row(3)), source={"kind": "file"})
+    monkeypatch.setattr(collection, "update_many", unexpected_update_many)
+    monkeypatch.setattr(
+        collection,
+        "bulk_write",
+        lambda *_, **__: (_ for _ in ()).throw(RuntimeError("simulated bulk failure")),
+    )
+    with pytest.raises(RuntimeError, match="simulated bulk failure"):
+        snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
 
-    active = list(collection.find({"is_active": True}))
-    assert {record["_id"] for record in active} == {"FILE:1", "FILE:2"}
-
-
-def test_completed_snapshot_records_the_completed_generation(snapshot_pipeline):
-    report = snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
-
-    state = snapshot_pipeline.store.db.portal_snapshot_state.find_one({"_id": "current"})
-    assert state["active_run_id"] == report["run_id"]
+    failed = snapshot_pipeline.store.db.portal_snapshot_runs.find_one()
+    assert calls == []
+    assert failed["status"] == "failed"

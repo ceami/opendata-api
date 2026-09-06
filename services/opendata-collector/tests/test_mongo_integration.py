@@ -208,8 +208,9 @@ def test_real_mongo_snapshot_uses_bulk_current_row_upserts(real_store):
         payload.replace(b"Before", b"After"), source={"kind": "integration"}
     )
 
-    row = real_store.db.portal_snapshot_records.find_one({"_id": "FILE:1"})
+    current = list(pipeline.store.current_records())
     assert first["status"] == second["status"] == "completed"
-    assert row["title"] == "After"
-    assert row["last_seen_run"] == second["run_id"]
+    assert current[0]["title"] == "After"
+    assert {row["run_id"] for row in current} == {second["run_id"]}
+    assert real_store.db.portal_snapshot_records.count_documents({}) == 4
     assert real_store.db.portal_raw.files.count_documents({}) == 2
