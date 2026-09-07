@@ -266,7 +266,10 @@ def test_snapshot_generations_deduplicate_raw_and_keep_latest_completed_rows(sna
 
     current = list(snapshot_pipeline.store.current_records())
     assert snapshot_pipeline.store.db.portal_raw.files.count_documents({}) == 2
-    assert snapshot_pipeline.store.db.portal_snapshot_runs.count_documents({"status": "completed"}) == 2
+    assert (
+        snapshot_pipeline.store.db.portal_snapshot_runs.count_documents({"status": "completed"})
+        == 2
+    )
     assert snapshot_pipeline.store.db.portal_snapshot_records.count_documents({}) == 2
     assert current[0]["run_id"] == second["run_id"] == repeated["run_id"]
     assert current[0]["title"] == "Renamed"
@@ -333,7 +336,9 @@ def test_parse_snapshot_csv_rejects_header_only_snapshot():
         parse_snapshot_csv(HEADERS.encode())
 
 
-def test_snapshot_rejects_valid_prefix_that_is_too_small_to_replace_current_generation(snapshot_pipeline):
+def test_snapshot_rejects_valid_prefix_that_is_too_small_to_replace_current_generation(
+    snapshot_pipeline,
+):
     snapshot_pipeline.run(
         snapshot_payload(*(snapshot_row(number) for number in range(1, 6))), source={"kind": "file"}
     )
@@ -342,7 +347,9 @@ def test_snapshot_rejects_valid_prefix_that_is_too_small_to_replace_current_gene
         snapshot_pipeline.run(snapshot_payload(snapshot_row(1)), source={"kind": "file"})
 
     current = list(snapshot_pipeline.store.current_records())
-    assert {record["catalog_id"] for record in current} == {f"FILE:{number}" for number in range(1, 6)}
+    assert {record["catalog_id"] for record in current} == {
+        f"FILE:{number}" for number in range(1, 6)
+    }
 
 
 def test_snapshot_store_serializes_publication_with_a_dedicated_lease(snapshot_pipeline):
@@ -357,9 +364,12 @@ def test_snapshot_store_serializes_publication_with_a_dedicated_lease(snapshot_p
         first.release("first")
 
 
-def test_failed_later_generation_is_invisible_and_marks_its_run_failed(snapshot_pipeline, monkeypatch):
+def test_failed_later_generation_is_invisible_and_marks_its_run_failed(
+    snapshot_pipeline, monkeypatch
+):
     first = snapshot_pipeline.run(
-        snapshot_payload(snapshot_row(1, title="Original"), snapshot_row(2)), source={"kind": "file"}
+        snapshot_payload(snapshot_row(1, title="Original"), snapshot_row(2)),
+        source={"kind": "file"},
     )
     collection = snapshot_pipeline.store.db.portal_snapshot_records
     original = collection.update_one
@@ -406,12 +416,16 @@ def test_completion_of_one_run_document_is_the_visibility_gate(snapshot_pipeline
         }
     )
 
-    assert {record["catalog_id"] for record in snapshot_pipeline.store.current_records()} == {"FILE:1"}
+    assert {record["catalog_id"] for record in snapshot_pipeline.store.current_records()} == {
+        "FILE:1"
+    }
 
     snapshot_pipeline.store.db.portal_snapshot_runs.update_one(
         {"_id": running_id}, {"$set": {"status": "completed", "completed_at": store_module.now()}}
     )
-    assert {record["catalog_id"] for record in snapshot_pipeline.store.current_records()} == {"FILE:2"}
+    assert {record["catalog_id"] for record in snapshot_pipeline.store.current_records()} == {
+        "FILE:2"
+    }
 
 
 def test_failed_generation_does_not_attempt_rollback_compensation(snapshot_pipeline, monkeypatch):
@@ -437,11 +451,15 @@ def test_failed_generation_does_not_attempt_rollback_compensation(snapshot_pipel
 
 
 @pytest.mark.parametrize("repeat_initialize", [False, True])
-def test_initialize_migrates_completed_legacy_rows_on_first_pass_and_preserves_indexes(repeat_initialize):
+def test_initialize_migrates_completed_legacy_rows_on_first_pass_and_preserves_indexes(
+    repeat_initialize,
+):
     database = mongomock.MongoClient(tz_aware=True).snapshot_migration
     records = database.portal_snapshot_records
     records.create_index([("data_type", 1), ("list_id", 1)], unique=True, name="legacy_identity")
-    records.create_index([("legacy_other", 1), ("run_id", 1)], unique=True, name="preserve_other_unique")
+    records.create_index(
+        [("legacy_other", 1), ("run_id", 1)], unique=True, name="preserve_other_unique"
+    )
     run_id = "legacy-completed"
     database.portal_snapshot_runs.insert_one(
         {
@@ -570,7 +588,10 @@ def test_duplicate_raw_replay_repairs_a_completed_generation_missing_rows(snapsh
 
     current = list(snapshot_pipeline.store.current_records())
     assert repaired["run_id"] != first["run_id"]
-    assert snapshot_pipeline.store.db.portal_snapshot_runs.count_documents({"status": "completed"}) == 2
+    assert (
+        snapshot_pipeline.store.db.portal_snapshot_runs.count_documents({"status": "completed"})
+        == 2
+    )
     assert {record["catalog_id"] for record in current} == {"FILE:1", "FILE:2"}
     assert {record["run_id"] for record in current} == {repaired["run_id"]}
 

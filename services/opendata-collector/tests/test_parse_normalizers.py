@@ -1124,7 +1124,6 @@ def test_invalid_linked_dcat_is_explicit_partial_error():
     ]
 
 
-
 def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance():
     detail = {
         "metadata": {
@@ -1204,7 +1203,6 @@ def test_monthly_snapshot_fills_blanks_but_preserves_live_detail_and_provenance(
     assert output.document["snapshot_run_id"] == "snapshot-run"
     assert output.document["snapshot_source"] == {"name": "monthly.csv"}
     assert output.document["snapshot_raw_sha256"] == "snapshot-hash"
-
 
 
 def test_monthly_snapshot_falls_back_for_contact_and_api_metadata():

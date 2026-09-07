@@ -697,7 +697,7 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
         _metadata_value(metadata, "목록명", "데이터명"),
         catalog.get("title"),
         monthly.get("title"),
-        monthly.get("list_title")
+        monthly.get("list_title"),
     )
     description = _first(
         source.get("desc"),
@@ -866,7 +866,7 @@ def _common(parse_input: ParseInput) -> tuple[dict[str, Any], dict[str, Any], di
             source.get("is_std_data"),
             monthly.get("is_standard_data"),
             monthly.get("is_std_data"),
-            default=None
+            default=None,
         ),
         "title_en": _first(source.get("title_en"), default=""),
         "register_status": _first(source.get("register_status"), default=""),
@@ -1332,7 +1332,7 @@ def _normalize_api(parse_input: ParseInput, document: dict[str, Any]) -> ParsedO
             "api_confirm_for_prod": _first(
                 source.get("is_confirmed_for_prod"),
                 monthly.get("is_confirmed_for_prod"),
-                default=""
+                default="",
             ),
             "traffic_limit": _first(
                 source.get("traffic_limit"), monthly.get("traffic_limit"), default=""

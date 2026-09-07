@@ -204,9 +204,7 @@ def test_real_mongo_snapshot_uses_bulk_current_row_upserts(real_store):
     pipeline = SnapshotPipeline(SnapshotStore(real_store.db, batch_size=2))
 
     first = pipeline.run(payload, source={"kind": "integration"})
-    second = pipeline.run(
-        payload.replace(b"Before", b"After"), source={"kind": "integration"}
-    )
+    second = pipeline.run(payload.replace(b"Before", b"After"), source={"kind": "integration"})
 
     current = list(pipeline.store.current_records())
     assert first["status"] == second["status"] == "completed"
@@ -219,9 +217,7 @@ def test_real_mongo_snapshot_uses_bulk_current_row_upserts(real_store):
 def test_real_mongo_migrates_completed_legacy_snapshot_rows(real_store):
     db = real_store.db
     records = db.portal_snapshot_records
-    records.create_index(
-        [("data_type", 1), ("list_id", 1)], unique=True, name="legacy_identity"
-    )
+    records.create_index([("data_type", 1), ("list_id", 1)], unique=True, name="legacy_identity")
     db.portal_snapshot_runs.insert_one(
         {
             "_id": "legacy-run",
